@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package notify;
+
+option go_package = "github.com/officiallysidsingh/go-notify/api/generated";
+
+service NotificationService {
+  rpc SendNotification (NotificationRequest) returns (NotificationResponse);
+}
+
+message NotificationRequest {
+  string user_id = 1;
+  string message = 2;
+}
+
+message NotificationResponse {
+  bool success = 1;
+  string error = 2;
+}
