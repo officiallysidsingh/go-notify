@@ -9,6 +9,7 @@ import (
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 const (
@@ -35,6 +36,8 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterNotificationServiceServer(grpcServer, server)
+
+	reflection.Register(grpcServer)
 
 	fmt.Printf("gRPC server is running on port %s\n", grpcPort)
 	if err := grpcServer.Serve(listener); err != nil {
