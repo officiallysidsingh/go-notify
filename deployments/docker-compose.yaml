@@ -10,7 +10,9 @@ services:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
   grpc-server:
-    build: .
+    build:
+      context: ../
+      dockerfile: deployments/docker/Dockerfile.grpc
     container_name: go-notify
     ports:
       - "50051:50051"
