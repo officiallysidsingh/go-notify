@@ -55,17 +55,32 @@ func NewProducer(url, queueName string) (*RabbitMQProducer, error) {
 
 // To send a message to the queue
 func (p *RabbitMQProducer) Publish(message string) error {
-	return p.channel.Publish(
-		"",
-		p.queue.Name,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType:  "text/plain",
-			Body:         []byte(message),
-			DeliveryMode: amqp.Persistent, // Ensure messages survive RabbitMQ restarts
-		},
-	)
+	var err error
+
+	// Retry upto 3 times
+	for i := 0; i < 3; i++ {
+		err = p.channel.Publish(
+			"",
+			p.queue.Name,
+			false,
+			false,
+			amqp.Publishing{
+				ContentType:  "text/plain",
+				Body:         []byte(message),
+				DeliveryMode: amqp.Persistent,
+			},
+		)
+		if err == nil {
+			return nil
+		}
+
+		log.Printf("Failed to publish message. Retrying... (%d/3)", i+1)
+
+		// Wait before retrying
+		time.Sleep(1 * time.Second)
+	}
+
+	return fmt.Errorf("failed to publish message after retries: %w", err)
 }
 
 // To shut down connection
