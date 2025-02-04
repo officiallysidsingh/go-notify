@@ -1,4 +1,4 @@
-.PHONY: build run clean proto
+.PHONY: build run clean proto test restart-rabbitmq
 
 build:
 	go build -o bin/server ./cmd/server
@@ -14,3 +14,9 @@ docker-up:
 
 docker-down:
 	docker-compose -f ./deployments/docker-compose.yaml down
+
+restart-rabbitmq:
+	docker restart rabbitmq
+
+test:
+	go test ./internal/... -v
