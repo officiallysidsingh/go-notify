@@ -47,8 +47,9 @@ func (p *RabbitMQProducer) Publish(message string) error {
 		false,
 		false,
 		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(message),
+			ContentType:  "text/plain",
+			Body:         []byte(message),
+			DeliveryMode: amqp.Persistent, // Ensure messages survive RabbitMQ restarts
 		},
 	)
 }
