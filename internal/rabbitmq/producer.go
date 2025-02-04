@@ -2,6 +2,8 @@ package rabbitmq
 
 import (
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/streadway/amqp"
 )
@@ -14,7 +16,19 @@ type RabbitMQProducer struct {
 
 // Init RabbitMQ Producer
 func NewProducer(url, queueName string) (*RabbitMQProducer, error) {
-	conn, err := amqp.Dial(url)
+	var conn *amqp.Connection
+	var err error
+
+	// Retry connection up to 5 times
+	for i := 0; i < 5; i++ {
+		conn, err = amqp.Dial(url)
+		if err == nil {
+			break
+		}
+		log.Printf("RabbitMQ connection failed. Retrying... (%d/5)", i+1)
+		time.Sleep(2 * time.Second)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
@@ -26,8 +40,8 @@ func NewProducer(url, queueName string) (*RabbitMQProducer, error) {
 
 	q, err := ch.QueueDeclare(
 		queueName,
-		true,
-		false,
+		true,  // Durable queue
+		false, // Do not auto-delete
 		false,
 		false,
 		nil,
