@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -9,6 +10,13 @@ import (
 	"github.com/officiallysidsingh/go-notify/internal/db"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 )
+
+// NotificationMessage defines the payload published to RabbitMQ.
+type NotificationMessage struct {
+	NotificationID int64  `json:"notification_id"`
+	UserID         string `json:"user_id"`
+	Message        string `json:"message"`
+}
 
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
@@ -31,12 +39,25 @@ func (s *NotificationServer) SendNotification(
 ) {
 	log.Printf("Received notification request for user: %s", req.UserId)
 
-	err := s.db.InsertNotification(req.UserId, req.Message, "pending")
+	// Insert notification into db
+	notificationID, err := s.db.InsertNotification(req.UserId, req.Message, "pending")
 	if err != nil {
 		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
 	}
 
-	err = s.producer.Publish(req.Message)
+	// Prepare payload
+	payload := NotificationMessage{
+		NotificationID: notificationID,
+		UserID:         req.UserId,
+		Message:        req.Message,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
+	}
+
+	// Publish the payload to RabbitMQ
+	err = s.producer.Publish(string(data))
 	if err != nil {
 		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
 	}
