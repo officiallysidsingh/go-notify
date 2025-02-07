@@ -6,9 +6,9 @@ import (
 	"net"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
-	"github.com/officiallysidsingh/go-notify/internal/db"
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
+	"github.com/officiallysidsingh/go-notify/internal/repository"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -29,7 +29,7 @@ func main() {
 	defer producer.Close()
 
 	// Init DB Connection
-	database := db.NewDB(postgresDSN)
+	database := repository.NewDB(postgresDSN)
 
 	// Start gRPC Server
 	listener, err := net.Listen("tcp", grpcPort)

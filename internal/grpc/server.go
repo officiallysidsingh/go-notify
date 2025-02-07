@@ -7,8 +7,8 @@ import (
 	"log"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
-	"github.com/officiallysidsingh/go-notify/internal/db"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
+	"github.com/officiallysidsingh/go-notify/internal/repository"
 )
 
 // NotificationMessage defines the payload published to RabbitMQ.
@@ -21,11 +21,14 @@ type NotificationMessage struct {
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
 	producer *rabbitmq.RabbitMQProducer
-	db       *db.DB
+	db       *repository.DB
 }
 
 // Init gRPC server
-func NewNotificationServer(producer *rabbitmq.RabbitMQProducer, db *db.DB) *NotificationServer {
+func NewNotificationServer(
+	producer *rabbitmq.RabbitMQProducer,
+	db *repository.DB,
+) *NotificationServer {
 	return &NotificationServer{producer: producer, db: db}
 }
 
