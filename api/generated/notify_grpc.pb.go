@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NotificationService_SendNotification_FullMethodName = "/notify.NotificationService/SendNotification"
+	NotificationService_SendNotification_FullMethodName      = "/notify.NotificationService/SendNotification"
+	NotificationService_GetNotificationStatus_FullMethodName = "/notify.NotificationService/GetNotificationStatus"
 )
 
 // NotificationServiceClient is the client API for NotificationService service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NotificationServiceClient interface {
 	SendNotification(ctx context.Context, in *NotificationRequest, opts ...grpc.CallOption) (*NotificationResponse, error)
+	GetNotificationStatus(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusResponse, error)
 }
 
 type notificationServiceClient struct {
@@ -47,11 +49,22 @@ func (c *notificationServiceClient) SendNotification(ctx context.Context, in *No
 	return out, nil
 }
 
+func (c *notificationServiceClient) GetNotificationStatus(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatusResponse)
+	err := c.cc.Invoke(ctx, NotificationService_GetNotificationStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NotificationServiceServer is the server API for NotificationService service.
 // All implementations must embed UnimplementedNotificationServiceServer
 // for forward compatibility.
 type NotificationServiceServer interface {
 	SendNotification(context.Context, *NotificationRequest) (*NotificationResponse, error)
+	GetNotificationStatus(context.Context, *StatusRequest) (*StatusResponse, error)
 	mustEmbedUnimplementedNotificationServiceServer()
 }
 
@@ -64,6 +77,9 @@ type UnimplementedNotificationServiceServer struct{}
 
 func (UnimplementedNotificationServiceServer) SendNotification(context.Context, *NotificationRequest) (*NotificationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendNotification not implemented")
+}
+func (UnimplementedNotificationServiceServer) GetNotificationStatus(context.Context, *StatusRequest) (*StatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNotificationStatus not implemented")
 }
 func (UnimplementedNotificationServiceServer) mustEmbedUnimplementedNotificationServiceServer() {}
 func (UnimplementedNotificationServiceServer) testEmbeddedByValue()                             {}
@@ -104,6 +120,24 @@ func _NotificationService_SendNotification_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NotificationService_GetNotificationStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NotificationServiceServer).GetNotificationStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NotificationService_GetNotificationStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NotificationServiceServer).GetNotificationStatus(ctx, req.(*StatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NotificationService_ServiceDesc is the grpc.ServiceDesc for NotificationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -114,6 +148,10 @@ var NotificationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendNotification",
 			Handler:    _NotificationService_SendNotification_Handler,
+		},
+		{
+			MethodName: "GetNotificationStatus",
+			Handler:    _NotificationService_GetNotificationStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

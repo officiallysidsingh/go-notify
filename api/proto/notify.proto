@@ -6,6 +6,7 @@ option go_package = "github.com/officiallysidsingh/go-notify/api/generated";
 
 service NotificationService {
   rpc SendNotification (NotificationRequest) returns (NotificationResponse);
+  rpc GetNotificationStatus (StatusRequest) returns (StatusResponse);
 }
 
 message NotificationRequest {
@@ -15,5 +16,14 @@ message NotificationRequest {
 
 message NotificationResponse {
   bool success = 1;
+  string error = 2;
+}
+
+message StatusRequest {
+  int32 notification_id = 1;
+}
+
+message StatusResponse {
+  string status = 1;
   string error = 2;
 }
