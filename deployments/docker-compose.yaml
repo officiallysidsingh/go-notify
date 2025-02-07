@@ -1,4 +1,3 @@
-version: "3.8"
 services:
   rabbitmq:
     image: "rabbitmq:3-management"
@@ -18,3 +17,18 @@ services:
       - "50051:50051"
     depends_on:
       - rabbitmq
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: notify
+      POSTGRES_PASSWORD: notify_pass
+      POSTGRES_DB: go_notify
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
