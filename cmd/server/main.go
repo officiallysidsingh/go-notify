@@ -6,6 +6,7 @@ import (
 	"net"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
+	"github.com/officiallysidsingh/go-notify/internal/db"
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 	"google.golang.org/grpc"
@@ -16,6 +17,7 @@ const (
 	grpcPort    = ":50051"
 	rabbitMQURL = "amqp://guest:guest@localhost:5672/"
 	queueName   = "notifications"
+	postgresDSN = "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
 )
 
 func main() {
@@ -26,13 +28,16 @@ func main() {
 	}
 	defer producer.Close()
 
+	// Init DB Connection
+	database := db.NewDB(postgresDSN)
+
 	// Start gRPC Server
 	listener, err := net.Listen("tcp", grpcPort)
 	if err != nil {
 		log.Fatalf("Failed to listen on port %s: %v", grpcPort, err)
 	}
 
-	server := grpcserver.NewNotificationServer(producer)
+	server := grpcserver.NewNotificationServer(producer, database)
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterNotificationServiceServer(grpcServer, server)
