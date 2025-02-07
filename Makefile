@@ -20,3 +20,9 @@ restart-rabbitmq:
 
 test:
 	go test ./internal/... -v
+
+migrate-up:
+	goose -dir db/migrations postgres "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable" up
+
+migrate-down:
+	goose -dir db/migrations postgres "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable" down
