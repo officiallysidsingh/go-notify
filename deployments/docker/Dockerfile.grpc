@@ -1,0 +1,32 @@
+# Use the official Golang image as the base image
+FROM golang:1.23 AS builder
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy go.mod and go.sum files to the working directory
+COPY go.mod go.sum ./
+
+# Download and cache dependencies
+RUN go mod download
+
+# Copy the entire application source code to the container
+COPY . .
+
+# Build the Go binary for the gRPC service
+RUN go build -o grpc_service ./cmd/server/main.go
+
+# Use a smaller base image for the final container
+FROM gcr.io/distroless/base-debian11
+
+# Set the working directory in the final image
+WORKDIR /app
+
+# Copy the Go binary from the builder stage
+COPY --from=builder /app/grpc_service /app/grpc_service
+
+# Expose the port used by the gRPC service (change 50051 to the port your app uses)
+EXPOSE 50051
+
+# Command to run the gRPC service
+CMD ["/app/grpc_service"]
