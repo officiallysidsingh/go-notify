@@ -15,6 +15,8 @@ import (
 type NotificationMessage struct {
 	NotificationID int64  `json:"notification_id"`
 	UserID         string `json:"user_id"`
+	Title          string `json:"title"`
+	Priority       string `json:"priority"`
 	Message        string `json:"message"`
 }
 
@@ -52,6 +54,8 @@ func (s *NotificationServer) SendNotification(
 	payload := NotificationMessage{
 		NotificationID: notificationID,
 		UserID:         req.UserId,
+		Title:          req.Title,
+		Priority:       req.Priority,
 		Message:        req.Message,
 	}
 	data, err := json.Marshal(payload)
