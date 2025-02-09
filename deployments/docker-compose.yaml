@@ -8,15 +8,7 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
-  grpc-server:
-    build:
-      context: ../
-      dockerfile: deployments/docker/Dockerfile.grpc
-    container_name: go-notify
-    ports:
-      - "50051:50051"
-    depends_on:
-      - rabbitmq
+
   postgres:
     image: postgres:15
     container_name: postgres
@@ -29,6 +21,26 @@ services:
       POSTGRES_DB: go_notify
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  grpc-server:
+    build:
+      context: ../
+      dockerfile: deployments/docker/Dockerfile.grpc
+    container_name: go-notify-grpc
+    ports:
+      - "50051:50051"
+    depends_on:
+      - rabbitmq
+      - postgres
+
+  worker:
+    build:
+      context: ../
+      dockerfile: deployments/docker/Dockerfile.worker
+    container_name: go-notify-worker
+    depends_on:
+      - rabbitmq
+      - postgres
 
 volumes:
   postgres_data:
