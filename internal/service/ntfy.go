@@ -6,11 +6,11 @@ import (
 	"net/http"
 )
 
-// SendPushNotification sends a push notification using ntfy.
-// - topic: your ntfy topic
-// - title: title for the notification
-// - message: the notification body
 func SendPushNotification(topic, title, message string) error {
+	// - topic: your ntfy topic
+	// - title: title for the notification
+	// - message: the notification body
+
 	url := fmt.Sprintf("https://ntfy.sh/%s", topic)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(message)))
