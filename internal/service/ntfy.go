@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-func SendPushNotification(topic, title, message string) error {
+func SendPushNotification(topic, title, priority, message string) error {
 	// - topic: your ntfy topic
 	// - title: title for the notification
 	// - message: the notification body
@@ -19,6 +19,7 @@ func SendPushNotification(topic, title, message string) error {
 	}
 
 	req.Header.Set("Title", title)
+	req.Header.Set("X-Priority", priority)
 	req.Header.Set("Content-Type", "text/plain")
 
 	client := &http.Client{}
