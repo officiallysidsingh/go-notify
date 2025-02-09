@@ -14,6 +14,8 @@ import (
 type NotificationMessage struct {
 	NotificationID int64  `json:"notification_id"`
 	UserID         string `json:"user_id"`
+	Title          string `json:"title"`
+	Priority       string `json:"priority"`
 	Message        string `json:"message"`
 }
 
@@ -89,7 +91,12 @@ func main() {
 			)
 
 			// Send push notification using ntfy.
-			err = service.SendPushNotification(ntfyTopic, "New Notification", notifMsg.Message)
+			err = service.SendPushNotification(
+				ntfyTopic,
+				notifMsg.Title,
+				notifMsg.Priority,
+				notifMsg.Message,
+			)
 			if err != nil {
 				log.Printf("Failed to send push notification: %v", err)
 				// Update DB status to "failed" and Nack the message.
