@@ -1,0 +1,18 @@
+grpc:
+  port: ":50051"
+
+rabbitmq:
+  url: "amqp://guest:guest@localhost:5672/"
+  queue: "notifications"
+
+postgres:
+  dsn: "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
+
+metrics:
+  port: ":9090"
+
+logging:
+  level: "info"
+
+ntfy:
+  topic: "go-notify-sid"
