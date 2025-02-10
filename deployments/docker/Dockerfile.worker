@@ -1,28 +1,27 @@
-# Use the official Golang image as the base image
+# Use the official Golang image as the base image for building
 FROM golang:1.23 AS builder
-
-# Set the working directory inside the container
 WORKDIR /app
 
 # Copy go.mod and go.sum files to the working directory
 COPY go.mod go.sum ./
-
-# Download and cache dependencies
 RUN go mod download
 
-# Copy the entire application source code to the container
 COPY . .
 
-# Build the Go binary for the worker service
+# Disable CGO to build a fully static binary
+ENV CGO_ENABLED=0
+
+# Build the gRPC server binary
 RUN go build -o worker_service ./cmd/worker/main.go
 
-# Use a smaller base image for the final container
-FROM gcr.io/distroless/base-debian11
+FROM debian:bullseye-slim
 
-# Set the working directory in the final image
+RUN apt-get update && \
+    apt-get install -y bash ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy the Go binary from the builder stage
 COPY --from=builder /app/worker_service /app/worker_service
 
 # Command to run the worker service

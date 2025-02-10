@@ -8,6 +8,11 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "status"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
   postgres:
     image: postgres:15
@@ -27,26 +32,42 @@ services:
       context: ../
       dockerfile: deployments/docker/Dockerfile.grpc
     container_name: go-notify-grpc
+    environment:
+      - GRPC_PORT=:50051
+      - METRICS_PORT=:9091
+      - RABBITMQ_QUEUE=notifications
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - POSTGRES_DSN=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
     ports:
       - "50051:50051"
+      - "9091:9090"
     depends_on:
-      - rabbitmq
-      - postgres
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_started
 
   worker:
     build:
       context: ../
       dockerfile: deployments/docker/Dockerfile.worker
     container_name: go-notify-worker
+    environment:
+      - NTFY_TOPIC=go-notify-sid
+      - RABBITMQ_QUEUE=notifications
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - POSTGRES_DSN=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
     depends_on:
-      - rabbitmq
-      - postgres
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_started
 
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
     volumes:
-      - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
 
@@ -67,7 +88,7 @@ services:
       - "3100:3100"
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
-      - ./deployments/loki:/etc/loki
+      - ./loki:/etc/loki
 
 volumes:
   postgres_data:
