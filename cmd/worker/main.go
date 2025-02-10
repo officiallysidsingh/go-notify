@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/officiallysidsingh/go-notify/config"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 	"github.com/officiallysidsingh/go-notify/internal/service"
 	"github.com/streadway/amqp"
@@ -19,16 +20,12 @@ type NotificationMessage struct {
 	Message        string `json:"message"`
 }
 
-const (
-	rabbitMQURL = "amqp://guest:guest@localhost:5672/"
-	queueName   = "notifications"
-	postgresDSN = "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
-	ntfyTopic   = "go-notify-sid"
-)
-
 func main() {
+	// Load configuration from the config folder.
+	config.LoadConfig("./config")
+
 	// Connect to RabbitMQ
-	conn, err := amqp.Dial(rabbitMQURL)
+	conn, err := amqp.Dial(config.AppConfig.RabbitMQ.URL)
 	if err != nil {
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}
@@ -43,7 +40,7 @@ func main() {
 
 	// Declare/Ensure queue exists
 	_, err = ch.QueueDeclare(
-		queueName,
+		config.AppConfig.RabbitMQ.Queue,
 		true,
 		false,
 		false,
@@ -55,11 +52,11 @@ func main() {
 	}
 
 	// Connect to PostgreSQL.
-	dbConn := repository.NewDB(postgresDSN)
+	dbConn := repository.NewDB(config.AppConfig.Postgres.DSN)
 
 	// Consume messages.
 	msgs, err := ch.Consume(
-		queueName,
+		config.AppConfig.RabbitMQ.Queue,
 		"",
 		false,
 		false,
@@ -92,7 +89,7 @@ func main() {
 
 			// Send push notification using ntfy.
 			err = service.SendPushNotification(
-				ntfyTopic,
+				config.AppConfig.Ntfy.Topic,
 				notifMsg.Title,
 				notifMsg.Priority,
 				notifMsg.Message,
