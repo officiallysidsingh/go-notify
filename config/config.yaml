@@ -9,7 +9,7 @@ postgres:
   dsn: "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
 
 metrics:
-  port: ":9090"
+  port: ":9091"
 
 logging:
   level: "info"

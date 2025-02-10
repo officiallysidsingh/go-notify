@@ -21,7 +21,7 @@ type NotificationMessage struct {
 }
 
 func main() {
-	// Load configuration from the config folder.
+	// Load configuration from the config folder
 	config.LoadConfig("./config")
 
 	// Connect to RabbitMQ
