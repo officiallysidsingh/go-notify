@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
@@ -20,10 +22,23 @@ type NotificationMessage struct {
 	Message        string `json:"message"`
 }
 
+// Prometheus total notification counter
+var notificationsReceived = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Name: "notifications_received_total",
+		Help: "Total number of notifications received via gRPC",
+	},
+)
+
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
 	producer *rabbitmq.RabbitMQProducer
 	db       *repository.DB
+}
+
+// Init prometheus counter
+func init() {
+	prometheus.MustRegister(notificationsReceived)
 }
 
 // Init gRPC server
@@ -42,6 +57,7 @@ func (s *NotificationServer) SendNotification(
 	*pb.NotificationResponse,
 	error,
 ) {
+	notificationsReceived.Inc()
 	log.Printf("Received notification request for user: %s", req.UserId)
 
 	// Insert notification into db
