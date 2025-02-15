@@ -58,44 +58,67 @@ Ideal for **e-commerce, SaaS, fintech, and microservices**, GoNotify enables rea
 ### Deployment
 
 - **Docker** containers for consistent environments across development and production.
-- **Kubernetes** for **orchestration** and scaling, ensuring the system can handle varying loads efficiently.
 
 ## **Prerequisites**
 
-- Go 1.20+
-- Docker
-- Kubernetes (optional)
-- RabbitMQ
-- PostgreSQL
-- Redis
+- [Docker](https://www.docker.com/get-started)
+- [Docker Compose](https://docs.docker.com/compose/)
 
 ## **Installation**
 
-1. Clone this repository:
+1. **Clone this repository:**
 
    ```bash
-   git clone https://github.com/your-username/GoNotify.git
-   cd GoNotify
+   git clone https://github.com/your-username/go-notify.git
+   cd go-notify
    ```
 
-2. Install dependencies:
+2. **Configure the environment:**
+   Update the configuration in config/config.yaml as needed.
+   You can also refer to config/env.example for environment variable settings.
+
+3. **Run the services using Docker Compose:**
 
    ```bash
-   go mod download
+   make docker-up
    ```
 
-3. Set up environment variables:
+   This command will start RabbitMQ, PostgreSQL, gRPC server, worker, Prometheus, Grafana, and Loki.
 
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
+4. **Access the Services:**
 
-4. Start services with Docker Compose:
-   ```bash
-   docker-compose up -d
-   ```
+   - gRPC Server: localhost:50051
+   - Prometheus Metrics: localhost:9090/metrics
+   - Grafana Dashboard: localhost:3000 (default login: admin/admin)
+   - RabbitMQ UI: localhost:15672
+
+## **Testing**
+
+- **Run tests locally:**
+
+  ```bash
+  make test
+  ```
+
+- **Generate Protobuf files:**
+
+  ```bash
+  make proto
+  ```
+
+## **CI/CD**
+
+This repository uses GitHub Actions for continuous integration and delivery. The workflow is defined in `/.github/workflows/ci.yml` and covers:
+
+- **Linting**
+- **Testing**
+- **Building**
+- **Docker image creation**
 
 ## **License**
 
 Distributed under the MIT License. See `LICENSE` for more information.
+
+## **Contributing**
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
