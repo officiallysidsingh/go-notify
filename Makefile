@@ -60,3 +60,7 @@ migrate-down:
 # Clean build artifacts
 clean:
 	rm -rf $(BIN_DIR)
+
+# Lint
+lint:
+	golangci-lint run
