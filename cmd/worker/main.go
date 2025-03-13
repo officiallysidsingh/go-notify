@@ -77,7 +77,9 @@ func main() {
 			err := json.Unmarshal(d.Body, &notifMsg)
 			if err != nil {
 				log.Printf("Error unmarshaling message: %v", err)
-				d.Nack(false, false)
+				if nackErr := d.Nack(false, false); nackErr != nil {
+					log.Printf("Error sending Nack: %v", nackErr)
+				}
 				continue
 			}
 
@@ -102,20 +104,27 @@ func main() {
 				}
 				// Requeue the message after a short delay.
 				time.Sleep(2 * time.Second)
-				d.Nack(false, true)
+				if nackErr := d.Nack(false, true); nackErr != nil {
+					log.Printf("Error sending Nack: %v", nackErr)
+				}
 				continue
 			}
 
 			// Update DB status to "sent".
 			if err := dbConn.UpdateNotificationStatus(notifMsg.NotificationID, "sent"); err != nil {
 				log.Printf("Failed to update notification status: %v", err)
-				d.Nack(false, true)
+				if nackErr := d.Nack(false, true); nackErr != nil {
+					log.Printf("Error sending Nack: %v", nackErr)
+				}
 				continue
 			}
 
 			// Acknowledge successful processing.
-			d.Ack(false)
-			log.Printf("Notification %d processed and sent.", notifMsg.NotificationID)
+			if ackErr := d.Ack(false); ackErr != nil {
+				log.Printf("Error sending Ack: %v", ackErr)
+			} else {
+				log.Printf("Notification %d processed and sent.", notifMsg.NotificationID)
+			}
 		}
 	}()
 

@@ -26,8 +26,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer logger.Sync()
 	sugar := logger.Sugar()
+	defer func() {
+		if err := logger.Sync(); err != nil {
+			sugar.Errorw("failed to sync logger", "error", err)
+		}
+	}()
 
 	// Start Prometheus metrics HTTP server in separate goroutine
 	go func() {
