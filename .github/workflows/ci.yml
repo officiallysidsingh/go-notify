@@ -70,8 +70,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install docker-compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
 
       - name: Login to DockerHub
         uses: docker/login-action@v3
@@ -79,10 +81,11 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+      - name: Build Docker images using docker-compose
+        run: docker-compose build
+
+      - name: Push Docker images using docker-compose
+        run: docker-compose push
         with:
-          context: .
-          push: false
           tags: |
             officiallysidsingh/go-notify:latest
