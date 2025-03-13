@@ -86,6 +86,3 @@ jobs:
 
       - name: Push Docker images using docker-compose
         run: docker-compose push
-        with:
-          tags: |
-            officiallysidsingh/go-notify:latest
