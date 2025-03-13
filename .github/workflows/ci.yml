@@ -82,7 +82,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build Docker images using docker-compose
-        run: docker-compose build
+        run: docker-compose -f deployments/docker-compose.yaml build
 
       - name: Push Docker images using docker-compose
-        run: docker-compose push
+        run: docker-compose -f deployments/docker-compose.yaml push
