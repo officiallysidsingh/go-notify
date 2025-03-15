@@ -16,7 +16,8 @@
 🔹 **Golang** – High-performance backend development\
 🔹 **RabbitMQ** – Message broker for async event processing\
 🔹 **Prometheus & Grafana** – Monitoring, logging, and observability\
-🔹 **PostgreSQL / MongoDB** – Optional notification storage
+🔹 **PostgreSQL** – Notification status storage\
+🔹 **Redis** – Rate limiting notifications
 
 ## **Use Case**
 
