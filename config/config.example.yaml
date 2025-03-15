@@ -1,0 +1,23 @@
+grpc:
+  port: ":50051" # gRPC server port
+
+rabbitmq:
+  url: "amqp://user:password@rabbitmq_host:5672/" # RabbitMQ connection URL
+  queue: "notifications" # Name of the queue
+
+postgres:
+  dsn: "postgres://user:password@db_host:5432/database_name?sslmode=disable" # PostgreSQL DSN
+
+redis:
+  addr: "redis_host:6379" # Redis address
+  limit: 5 # Rate limiting: max requests
+  window: "1m" # Rate limiting window duration
+
+metrics:
+  port: ":9091" # Metrics server port
+
+logging:
+  level: "info" # Logging level (debug, info, warn, error)
+
+ntfy:
+  topic: "notification-topic" # Topic for push notifications
