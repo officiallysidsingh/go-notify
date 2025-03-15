@@ -7,16 +7,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Holds all configuration values.
-type Config struct {
-	GRPC     GRPCConfig
-	RabbitMQ RabbitMQConfig
-	Postgres PostgresConfig
-	Metrics  MetricsConfig
-	Logging  LoggingConfig
-	Ntfy     NtfyConfig
-}
-
 type GRPCConfig struct {
 	Port string
 }
@@ -30,6 +20,12 @@ type PostgresConfig struct {
 	DSN string
 }
 
+type RedisConfig struct {
+	Addr   string
+	Limit  int
+	Window string
+}
+
 type MetricsConfig struct {
 	Port string
 }
@@ -40,6 +36,17 @@ type LoggingConfig struct {
 
 type NtfyConfig struct {
 	Topic string
+}
+
+// Holds all configuration values.
+type Config struct {
+	GRPC     GRPCConfig
+	RabbitMQ RabbitMQConfig
+	Postgres PostgresConfig
+	Redis    RedisConfig
+	Metrics  MetricsConfig
+	Logging  LoggingConfig
+	Ntfy     NtfyConfig
 }
 
 // Global config instance
@@ -69,6 +76,11 @@ func LoadConfig(path string) {
 		},
 		Postgres: PostgresConfig{
 			DSN: viper.GetString("postgres.dsn"),
+		},
+		Redis: RedisConfig{
+			Addr:   viper.GetString("redis.addr"),
+			Limit:  viper.GetInt("redis.limit"),
+			Window: viper.GetString("redis.window"),
 		},
 		Metrics: MetricsConfig{
 			Port: viper.GetString("metrics.port"),
