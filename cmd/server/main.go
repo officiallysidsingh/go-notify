@@ -1,8 +1,10 @@
 package main
 
 import (
+	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/officiallysidsingh/go-notify/config"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -11,6 +13,7 @@ import (
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
+	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 
 	"google.golang.org/grpc"
@@ -45,7 +48,6 @@ func main() {
 	// Init RabbitMQ Producer
 	producer, err := rabbitmq.NewProducer(
 		config.AppConfig.RabbitMQ.URL,
-		config.AppConfig.RabbitMQ.Queue,
 	)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize RabbitMQ: %v", err)
@@ -55,6 +57,19 @@ func main() {
 	// Connect to Postgres DB
 	database := repository.NewDB(config.AppConfig.Postgres.DSN)
 
+	// Convert the Redis window from string to time.Duration
+	redisWindowDuration, err := time.ParseDuration(config.AppConfig.Redis.Window)
+	if err != nil {
+		log.Fatalf("Invalid Redis window duration: %v", err)
+	}
+
+	// Connect to Rate Limiter
+	limiter := ratelimiter.NewRateLimiter(
+		config.AppConfig.Redis.Addr,
+		config.AppConfig.Redis.Limit,
+		redisWindowDuration,
+	)
+
 	// Start gRPC Server
 	listener, err := net.Listen("tcp", config.AppConfig.GRPC.Port)
 	if err != nil {
@@ -62,7 +77,7 @@ func main() {
 	}
 
 	// Create gRPC server with integrated notification service
-	server := grpcserver.NewNotificationServer(producer, database)
+	server := grpcserver.NewNotificationServer(producer, database, limiter)
 	grpcServer := grpc.NewServer()
 	pb.RegisterNotificationServiceServer(grpcServer, server)
 
