@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -10,6 +11,7 @@ import (
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
+	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 )
 
@@ -20,6 +22,7 @@ type NotificationMessage struct {
 	Title          string `json:"title"`
 	Priority       string `json:"priority"`
 	Message        string `json:"message"`
+	Type           string `json:"type"`
 }
 
 // Prometheus total notification counter
@@ -32,8 +35,9 @@ var notificationsReceived = prometheus.NewCounter(
 
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
-	producer *rabbitmq.RabbitMQProducer
-	db       *repository.DB
+	producer    *rabbitmq.RabbitMQProducer
+	db          *repository.DB
+	rateLimiter *ratelimiter.RateLimiter
 }
 
 // Init prometheus counter
@@ -45,8 +49,13 @@ func init() {
 func NewNotificationServer(
 	producer *rabbitmq.RabbitMQProducer,
 	db *repository.DB,
+	limiter *ratelimiter.RateLimiter,
 ) *NotificationServer {
-	return &NotificationServer{producer: producer, db: db}
+	return &NotificationServer{
+		producer:    producer,
+		db:          db,
+		rateLimiter: limiter,
+	}
 }
 
 // To handle notification requests
@@ -57,6 +66,26 @@ func (s *NotificationServer) SendNotification(
 	*pb.NotificationResponse,
 	error,
 ) {
+	// Rate limiting
+	allowed, err := s.rateLimiter.Allow(ctx, req.UserId)
+	if err != nil {
+		log.Printf("Rate limiter error: %v", err)
+		return &pb.NotificationResponse{
+				Success: false,
+				Error:   "Rate limiter error",
+			}, errors.New(
+				"Rate limiter error",
+			)
+	}
+	if !allowed {
+		return &pb.NotificationResponse{
+				Success: false,
+				Error:   "Rate limit exceeded",
+			}, errors.New(
+				"Rate limit exceeded",
+			)
+	}
+
 	notificationsReceived.Inc()
 	log.Printf("Received notification request for user: %s", req.UserId)
 
@@ -73,6 +102,7 @@ func (s *NotificationServer) SendNotification(
 		Title:          req.Title,
 		Priority:       req.Priority,
 		Message:        req.Message,
+		Type:           req.Type,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -80,7 +110,7 @@ func (s *NotificationServer) SendNotification(
 	}
 
 	// Publish the payload to RabbitMQ
-	err = s.producer.Publish(string(data))
+	err = s.producer.Publish("notification_exchange_topic", req.Type, string(data))
 	if err != nil {
 		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
 	}
