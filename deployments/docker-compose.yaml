@@ -38,6 +38,9 @@ services:
       - RABBITMQ_QUEUE=notifications
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
       - POSTGRES_DSN=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_LIMIT=5
+      - REDIS_WINDOW=1m
     ports:
       - "50051:50051"
       - "9091:9090"
