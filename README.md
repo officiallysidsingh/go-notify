@@ -76,7 +76,7 @@ Ideal for **e-commerce, SaaS, fintech, and microservices**, GoNotify enables rea
 
 2. **Configure the environment:**
    Update the configuration in config/config.yaml as needed.
-   You can also refer to config/env.example for environment variable settings.
+   You can also refer to config/config.example.yaml for environment variable settings.
 
 3. **Run the services using Docker Compose:**
 
