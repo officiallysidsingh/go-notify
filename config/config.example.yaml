@@ -3,7 +3,6 @@ grpc:
 
 rabbitmq:
   url: "amqp://user:password@rabbitmq_host:5672/" # RabbitMQ connection URL
-  queue: "notifications" # Name of the queue
 
 postgres:
   dsn: "postgres://user:password@db_host:5432/database_name?sslmode=disable" # PostgreSQL DSN
