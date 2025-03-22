@@ -12,8 +12,7 @@ type GRPCConfig struct {
 }
 
 type RabbitMQConfig struct {
-	URL   string
-	Queue string
+	URL string
 }
 
 type PostgresConfig struct {
@@ -71,8 +70,7 @@ func LoadConfig(path string) {
 			Port: viper.GetString("grpc.port"),
 		},
 		RabbitMQ: RabbitMQConfig{
-			URL:   viper.GetString("rabbitmq.url"),
-			Queue: viper.GetString("rabbitmq.queue"),
+			URL: viper.GetString("rabbitmq.url"),
 		},
 		Postgres: PostgresConfig{
 			DSN: viper.GetString("postgres.dsn"),
