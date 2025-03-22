@@ -17,6 +17,8 @@ import (
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -81,6 +83,14 @@ func main() {
 	grpcServer := grpc.NewServer()
 	pb.RegisterNotificationServiceServer(grpcServer, server)
 
+	// Register gRPC health service
+	healthServer := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+
+	// Mark the server as serving
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+
+	// Register reflection service for debugging
 	reflection.Register(grpcServer)
 
 	sugar.Infof("gRPC server running on %s", config.AppConfig.GRPC.Port)
