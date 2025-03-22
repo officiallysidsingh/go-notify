@@ -19,7 +19,7 @@ func NewProducer(url string) (*RabbitMQProducer, error) {
 	var err error
 
 	// Retry connection up to 5 times
-	for i := 0; i < 5; i++ {
+	for i := range [5]int{} {
 		conn, err = amqp.Dial(url)
 		if err == nil {
 			break
@@ -36,10 +36,18 @@ func NewProducer(url string) (*RabbitMQProducer, error) {
 		return nil, fmt.Errorf("failed to open a channel: %w", err)
 	}
 
-	return &RabbitMQProducer{
+	producer := &RabbitMQProducer{
 		conn:    conn,
 		channel: ch,
-	}, nil
+	}
+
+	// Ensure exchanges and queues are created
+	if err := producer.SetupExchangesAndQueues(); err != nil {
+		producer.Close() // Close connection on failure
+		return nil, fmt.Errorf("failed to setup exchanges and queues: %w", err)
+	}
+
+	return producer, nil
 }
 
 // Declare necessary exchanges and queues
@@ -168,7 +176,7 @@ func (p *RabbitMQProducer) Publish(exchange, routingKey, message string) error {
 	var err error
 
 	// Retry upto 3 times
-	for i := 0; i < 3; i++ {
+	for i := range [3]int{} {
 		err = p.channel.Publish(
 			exchange,
 			routingKey,
