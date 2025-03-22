@@ -36,7 +36,7 @@ docker-build:
 
 # Start Docker containers
 docker-up:
-	docker-compose -f ./deployments/docker-compose.yaml up --build -d
+	docker-compose -f ./deployments/docker-compose.yaml up --build -d && make migrate-up
 
 # Stop Docker containers
 docker-down:
