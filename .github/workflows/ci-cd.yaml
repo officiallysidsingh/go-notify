@@ -48,6 +48,12 @@ jobs:
           mkdir -p api/generated
           make proto
 
+      - name: Upload generated proto files artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: generated-files
+          path: api/generated
+
       - name: Ensure dependencies are up-to-date
         run: go mod tidy
 
@@ -71,6 +77,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download generated proto files artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: generated-files
+          path: api/generated
 
       - name: Install docker-compose
         run: |
