@@ -8,6 +8,8 @@ RUN go mod download
 
 COPY . .
 
+RUN find . -type f
+
 # Disable CGO to build a fully static binary
 ENV CGO_ENABLED=0
 
