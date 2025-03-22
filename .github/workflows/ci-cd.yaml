@@ -44,7 +44,9 @@ jobs:
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Generate Protobuf files
-        run: make proto
+        run: |
+          mkdir -p api/generated
+          make proto
 
       - name: Ensure dependencies are up-to-date
         run: go mod tidy
