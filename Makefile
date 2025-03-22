@@ -35,12 +35,12 @@ docker-build:
 	docker-compose -f ./deployments/docker-compose.yaml build
 
 # Start Docker containers
-docker-up: docker-build
-	docker-compose -f ./deployments/docker-compose.yaml up -d
+docker-up:
+	docker-compose -f ./deployments/docker-compose.yaml up --build -d
 
 # Stop Docker containers
 docker-down:
-	docker-compose -f ./deployments/docker-compose.yaml down
+	docker-compose -f ./deployments/docker-compose.yaml down -v
 
 # Restart RabbitMQ
 restart-rabbitmq:
