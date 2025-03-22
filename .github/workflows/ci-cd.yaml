@@ -32,9 +32,6 @@ jobs:
             ~/.local/share/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
-      - name: Ensure dependencies are up-to-date
-        run: go mod tidy
-
       - name: Install Protobuf Compiler
         run: |
           sudo apt-get update
@@ -48,6 +45,9 @@ jobs:
 
       - name: Generate Protobuf files
         run: make proto
+
+      - name: Ensure dependencies are up-to-date
+        run: go mod tidy
 
       - name: Run tests
         run: make test
