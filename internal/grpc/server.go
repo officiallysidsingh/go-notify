@@ -90,7 +90,7 @@ func (s *NotificationServer) SendNotification(
 	log.Printf("Received notification request for user: %s", req.UserId)
 
 	// Insert notification into db
-	notificationID, err := s.db.InsertNotification(req.UserId, req.Message, "pending")
+	notificationID, err := s.db.InsertNotification(ctx, req.UserId, req.Message, "pending")
 	if err != nil {
 		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
 	}
