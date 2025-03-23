@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -16,7 +17,12 @@ type RabbitMQConfig struct {
 }
 
 type PostgresConfig struct {
-	DSN string
+	DataSourceName  string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+	ConnTimeout     time.Duration
 }
 
 type RedisConfig struct {
@@ -73,7 +79,12 @@ func LoadConfig(path string) {
 			URL: viper.GetString("rabbitmq.url"),
 		},
 		Postgres: PostgresConfig{
-			DSN: viper.GetString("postgres.dsn"),
+			DataSourceName:  viper.GetString("postgres.DataSourceName"),
+			MaxOpenConns:    viper.GetInt("postgres.MaxOpenConns"),
+			MaxIdleConns:    viper.GetInt("postgres.MaxIdleConns"),
+			ConnMaxLifetime: viper.GetDuration("postgres.ConnMaxLifetime"),
+			ConnMaxIdleTime: viper.GetDuration("postgres.ConnMaxIdleTime"),
+			ConnTimeout:     viper.GetDuration("postgres.ConnTimeout"),
 		},
 		Redis: RedisConfig{
 			Addr:   viper.GetString("redis.addr"),
