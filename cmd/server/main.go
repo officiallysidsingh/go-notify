@@ -12,7 +12,7 @@ import (
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
-	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
+	"github.com/officiallysidsingh/go-notify/internal/producer"
 	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 
@@ -48,7 +48,7 @@ func main() {
 	}()
 
 	// Init RabbitMQ Producer
-	producer, err := rabbitmq.NewProducer(
+	producer, err := producer.NewProducer(
 		config.AppConfig.RabbitMQ.URL,
 	)
 	if err != nil {

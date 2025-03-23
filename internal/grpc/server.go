@@ -10,7 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
-	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
+	"github.com/officiallysidsingh/go-notify/internal/producer"
 	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 )
@@ -35,7 +35,7 @@ var notificationsReceived = prometheus.NewCounter(
 
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
-	producer    *rabbitmq.RabbitMQProducer
+	producer    *producer.RabbitMQProducer
 	db          *repository.DB
 	rateLimiter *ratelimiter.RateLimiter
 }
@@ -47,7 +47,7 @@ func init() {
 
 // Init gRPC server
 func NewNotificationServer(
-	producer *rabbitmq.RabbitMQProducer,
+	producer *producer.RabbitMQProducer,
 	db *repository.DB,
 	limiter *ratelimiter.RateLimiter,
 ) *NotificationServer {
