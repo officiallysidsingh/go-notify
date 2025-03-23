@@ -5,7 +5,12 @@ rabbitmq:
   url: "amqp://user:password@rabbitmq_host:5672/" # RabbitMQ connection URL
 
 postgres:
-  dsn: "postgres://user:password@db_host:5432/database_name?sslmode=disable" # PostgreSQL DSN
+  DataSourceName: "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable" # PostgreSQL DataSourceName
+  MaxOpenConns: 100 # PostgreSQL MaxOpenConns
+  MaxIdleConns: 25 # PostgreSQL MaxIdleConns
+  ConnMaxLifetime: 20 * time.Minute # PostgreSQL ConnMaxLifetime
+  ConnMaxIdleTime: 5 * time.Minute # PostgreSQL ConnMaxIdleTime
+  ConnTimeout: 3 * time.Second # PostgreSQL ConnTimeout
 
 redis:
   addr: "redis_host:6379" # Redis address

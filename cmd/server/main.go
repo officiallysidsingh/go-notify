@@ -57,7 +57,11 @@ func main() {
 	defer producer.Close()
 
 	// Connect to Postgres DB
-	database := repository.NewDB(config.AppConfig.Postgres.DSN)
+	database, err := repository.NewDB(config.AppConfig.Postgres)
+	if err != nil {
+		sugar.Fatalf("Failed to initialize PostgresDB: %v", err)
+	}
+	defer database.Close()
 
 	// Convert the Redis window from string to time.Duration
 	redisWindowDuration, err := time.ParseDuration(config.AppConfig.Redis.Window)
