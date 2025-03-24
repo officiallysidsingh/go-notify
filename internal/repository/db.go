@@ -58,10 +58,12 @@ func (d *DB) InsertNotification(
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	// Rollback if something goes wrong
+	// Ensure rollback if something goes wrong
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				err = fmt.Errorf("rollback error: %v (original error: %w)", rbErr, err)
+			}
 		}
 	}()
 
