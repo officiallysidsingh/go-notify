@@ -49,7 +49,9 @@ func NewConsumer(amqpURL string, workers int, db *repository.DB) (*Consumer, err
 
 	ch, err := conn.Channel()
 	if err != nil {
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			log.Printf("error closing connection: %v", err)
+		}
 		return nil, err
 	}
 
@@ -229,6 +231,12 @@ func (c *Consumer) processMessage(msg Message) {
 func (c *Consumer) Stop() {
 	close(c.msgChannel)
 	c.wg.Wait()
-	c.ch.Close()
-	c.conn.Close()
+
+	if err := c.ch.Close(); err != nil {
+		log.Printf("error closing channel: %v", err)
+	}
+
+	if err := c.conn.Close(); err != nil {
+		log.Printf("error closing consumer connection: %v", err)
+	}
 }

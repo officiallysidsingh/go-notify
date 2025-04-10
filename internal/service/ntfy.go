@@ -30,7 +30,12 @@ func SendPushNotification(topic, title, priority, message string) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			log.Printf("error closing response body: %v", err)
+		}
+	}()
 
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("ailed to send push notification, status code: %d", res.StatusCode)
