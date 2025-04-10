@@ -74,7 +74,7 @@ func (s *NotificationServer) SendNotification(
 				Success: false,
 				Error:   "Rate limiter error",
 			}, errors.New(
-				"Rate limiter error",
+				"rate limiter error",
 			)
 	}
 	if !allowed {
@@ -82,7 +82,7 @@ func (s *NotificationServer) SendNotification(
 				Success: false,
 				Error:   "Rate limit exceeded",
 			}, errors.New(
-				"Rate limit exceeded",
+				"rate limit exceeded",
 			)
 	}
 

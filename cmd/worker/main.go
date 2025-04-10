@@ -17,7 +17,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize PostgresDB: %v", err)
 	}
-	defer dbConn.Close()
+
+	defer func() {
+		if err := dbConn.Close(); err != nil {
+			log.Printf("error closing dbConn: %v", err)
+		}
+	}()
 
 	// Create a new consumer with a global worker pool
 	consumer, err := consumer.NewConsumer(config.AppConfig.RabbitMQ.URL, 10, dbConn)

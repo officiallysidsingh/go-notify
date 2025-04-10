@@ -61,7 +61,12 @@ func main() {
 	if err != nil {
 		sugar.Fatalf("Failed to initialize PostgresDB: %v", err)
 	}
-	defer database.Close()
+
+	defer func() {
+		if err := database.Close(); err != nil {
+			log.Printf("error closing database: %v", err)
+		}
+	}()
 
 	// Convert the Redis window from string to time.Duration
 	redisWindowDuration, err := time.ParseDuration(config.AppConfig.Redis.Window)

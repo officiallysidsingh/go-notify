@@ -204,9 +204,13 @@ func (p *RabbitMQProducer) Publish(exchange, routingKey, message string) error {
 // To shut down connection
 func (p *RabbitMQProducer) Close() {
 	if p.channel != nil {
-		p.channel.Close()
+		if err := p.channel.Close(); err != nil {
+			log.Printf("error closing producer channel: %v", err)
+		}
 	}
 	if p.conn != nil {
-		p.conn.Close()
+		if err := p.conn.Close(); err != nil {
+			log.Printf("error closing producer connection: %v", err)
+		}
 	}
 }
