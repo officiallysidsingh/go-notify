@@ -3,12 +3,14 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 )
 
 func SendPushNotification(topic, title, priority, message string) error {
-	// - topic: your ntfy topic
+	// - topic: ntfy topic
 	// - title: title for the notification
+	// - priority: priority of notification(1 - 5)
 	// - message: the notification body
 
 	url := fmt.Sprintf("https://ntfy.sh/%s", topic)

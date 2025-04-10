@@ -48,7 +48,7 @@ restart-rabbitmq:
 
 # Run tests
 test:
-	go test ./internal/... -v
+	go test ./tests -v
 
 # Database migrations
 migrate-up:

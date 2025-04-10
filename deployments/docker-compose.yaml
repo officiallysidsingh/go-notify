@@ -37,7 +37,12 @@ services:
       - METRICS_PORT=:9091
       - RABBITMQ_QUEUE=notifications
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - POSTGRES_DSN=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
+      - POSTGRES_DATASOURCENAME=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
+      - POSTGRES_MAXOPENCONNS=100
+      - POSTGRES_MAXIDLECONNS=25
+      - POSTGRES_CONNMAXLIFETIME=20m
+      - POSTGRES_CONNMAXIDLETIME=5m
+      - POSTGRES_CONNTIMEOUT=3s
       - REDIS_ADDR=redis:6379
       - REDIS_LIMIT=5
       - REDIS_WINDOW=1m
@@ -64,7 +69,12 @@ services:
       - NTFY_TOPIC=go-notify-sid
       - RABBITMQ_QUEUE=notifications
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - POSTGRES_DSN=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
+      - POSTGRES_DATASOURCENAME=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
+      - POSTGRES_MAXOPENCONNS=100
+      - POSTGRES_MAXIDLECONNS=25
+      - POSTGRES_CONNMAXLIFETIME=20m
+      - POSTGRES_CONNMAXIDLETIME=5m
+      - POSTGRES_CONNTIMEOUT=3s
     depends_on:
       rabbitmq:
         condition: service_healthy
