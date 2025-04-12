@@ -60,6 +60,10 @@ Ideal for **e-commerce, SaaS, fintech, and microservices**, GoNotify enables rea
 
 - **Docker** containers for consistent environments across development and production.
 
+## Architecture Diagram
+
+![Architecture Diagram](https://github.com/user-attachments/assets/8858dd74-74e3-4189-a366-23c6924026cf)
+
 ## **Prerequisites**
 
 - [Docker](https://www.docker.com/get-started)
@@ -109,7 +113,7 @@ Ideal for **e-commerce, SaaS, fintech, and microservices**, GoNotify enables rea
 
 ## **CI/CD**
 
-This repository uses GitHub Actions for continuous integration and delivery. The workflow is defined in `/.github/workflows/ci.yml` and covers:
+This repository uses GitHub Actions for continuous integration and delivery. The workflow is defined in `/.github/workflows/ci-cd.yml` and covers:
 
 - **Linting**
 - **Testing**
