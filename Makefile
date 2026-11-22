@@ -28,6 +28,7 @@ worker: build
 
 # Generate protobuf code
 proto:
+	mkdir -p $(GENERATED_DIR)
 	protoc --go_out=$(GENERATED_DIR) --go-grpc_out=$(GENERATED_DIR) --go_opt=paths=source_relative --go-grpc_opt=paths=source_relative --proto_path=$(PROTO_PATH) $(PROTO_PATH)/*.proto
 
 # Build Docker images
