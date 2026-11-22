@@ -1,50 +1,52 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/officiallysidsingh/go-notify/config"
 	"github.com/officiallysidsingh/go-notify/internal/consumer"
+	"github.com/officiallysidsingh/go-notify/internal/notification"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
+	"github.com/officiallysidsingh/go-notify/internal/service"
+)
+
+const (
+	workerCount     = 10
+	sendAttempts    = 3
+	sendRetryDelay  = 2 * time.Second
+	pushSendTimeout = 10 * time.Second
 )
 
 func main() {
-	// Load configuration from the config folder
 	config.LoadConfig("./config")
 
-	// Connect to PostgreSQL
-	dbConn, err := repository.NewDB(config.AppConfig.Postgres)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	database, err := repository.NewDB(config.AppConfig.Postgres)
 	if err != nil {
 		log.Fatalf("Failed to initialize PostgresDB: %v", err)
 	}
-
 	defer func() {
-		if err := dbConn.Close(); err != nil {
-			log.Printf("error closing dbConn: %v", err)
+		if err := database.Close(); err != nil {
+			log.Printf("error closing database: %v", err)
 		}
 	}()
 
-	// Create a new consumer with a global worker pool
-	consumer, err := consumer.NewConsumer(config.AppConfig.RabbitMQ.URL, 10, dbConn)
-	if err != nil {
-		log.Fatalf("Failed to initialize consumer: %v", err)
+	// Email and SMS have no sender yet; the processor fails and dead-letters
+	// those notifications instead of reporting them as sent.
+	senders := map[string]consumer.Sender{
+		notification.TypePush: service.NewNtfySender(
+			service.NtfyBaseURL, config.AppConfig.Ntfy.Topic, pushSendTimeout,
+		),
 	}
+	retry := consumer.RetryPolicy{MaxAttempts: sendAttempts, Delay: sendRetryDelay}
+	processor := consumer.NewProcessor(database, senders, retry)
 
-	// Define queues
-	queues := []string{
-		"dead_letter_queue",
-		"queue_email",
-		"queue_sms",
-		"queue_push",
-	}
-
-	// Start the consumer
-	if err := consumer.Start(queues); err != nil {
-		log.Fatalf("Failed to start consumer: %v", err)
-	}
-
-	log.Println("Consumer is up and running, waiting for messages...")
-
-	// Block forever
-	select {}
+	consumer.NewConsumer(config.AppConfig.RabbitMQ.URL, workerCount, processor).Run(ctx)
+	log.Println("Worker stopped")
 }

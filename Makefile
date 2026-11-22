@@ -1,4 +1,4 @@
-.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test docker-build
+.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test docker-build lint
 
 # Variables
 DB_URL := "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
@@ -48,7 +48,7 @@ restart-rabbitmq:
 
 # Run tests
 test:
-	go test ./tests -v
+	go test ./... -v
 
 # Database migrations
 migrate-up:

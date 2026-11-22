@@ -2,241 +2,190 @@ package consumer
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
-	"github.com/officiallysidsingh/go-notify/config"
-	"github.com/officiallysidsingh/go-notify/internal/repository"
-	"github.com/officiallysidsingh/go-notify/internal/service"
 	"github.com/streadway/amqp"
+
+	"github.com/officiallysidsingh/go-notify/internal/notification"
+	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 )
 
-// Payload from RabbitMQ
-type NotificationMessage struct {
-	NotificationID int64  `json:"notification_id"`
-	UserID         string `json:"user_id"`
-	Title          string `json:"title"`
-	Priority       string `json:"priority"`
-	Message        string `json:"message"`
-	Type           string `json:"type"`
+const (
+	reconnectDelay    = 5 * time.Second
+	processingTimeout = time.Minute
+)
+
+type deliveryHandler func(ctx context.Context, delivery amqp.Delivery)
+
+type job struct {
+	handle   deliveryHandler
+	delivery amqp.Delivery
 }
 
-// Message wraps a RabbitMQ delivery with its queue name
-type Message struct {
-	QueueName string
-	Delivery  amqp.Delivery
-}
-
-// Consumer encapsulates the logic for consuming messages
+// Consumer feeds deliveries from every notification queue to a shared worker
+// pool and reconnects whenever the broker connection is lost.
 type Consumer struct {
-	conn       *amqp.Connection
-	ch         *amqp.Channel
-	dbConn     *repository.DB
-	msgChannel chan Message
-	workers    int
-	wg         sync.WaitGroup
+	amqpURL   string
+	workers   int
+	processor *Processor
 }
 
-// Create a new Consumer instance
-func NewConsumer(amqpURL string, workers int, db *repository.DB) (*Consumer, error) {
-	// Connect to RabbitMQ
-	conn, err := amqp.Dial(amqpURL)
-	if err != nil {
-		return nil, err
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		if err := conn.Close(); err != nil {
-			log.Printf("error closing connection: %v", err)
-		}
-		return nil, err
-	}
-
-	return &Consumer{
-		conn:       conn,
-		ch:         ch,
-		dbConn:     db,
-		workers:    workers,
-		msgChannel: make(chan Message, 100),
-	}, nil
+func NewConsumer(amqpURL string, workers int, processor *Processor) *Consumer {
+	return &Consumer{amqpURL: amqpURL, workers: workers, processor: processor}
 }
 
-// Consume messages from multiple queues
-func (c *Consumer) Start(queues []string) error {
-	// Enable Dead Lettering
-	queueArgs := amqp.Table{
-		"x-dead-letter-exchange":    "dead_letter_exchange",
-		"x-dead-letter-routing-key": "dead_letter",
+// Run consumes until ctx is cancelled, then returns once in-flight
+// notifications have been settled.
+func (c *Consumer) Run(ctx context.Context) {
+	for ctx.Err() == nil {
+		err := c.consumeUntilDisconnected(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("Lost RabbitMQ connection, reconnecting in %s: %v", reconnectDelay, err)
+		waitOrDone(ctx, reconnectDelay)
 	}
+}
 
-	// Declare and start a consumer for each queue
-	for _, queueName := range queues {
-		var args amqp.Table
+func (c *Consumer) consumeUntilDisconnected(ctx context.Context) error {
+	conn, err := amqp.Dial(c.amqpURL)
+	if err != nil {
+		return fmt.Errorf("failed to dial: %w", err)
+	}
+	defer closeQuietly(conn)
 
-		// No args in dead_letter_queue
-		if queueName == "dead_letter_queue" {
-			args = nil
-		} else {
-			args = queueArgs
-		}
+	channel, err := c.openChannel(conn)
+	if err != nil {
+		return err
+	}
+	handlers := c.handlersByQueue()
+	jobs, err := subscribe(channel, handlers)
+	if err != nil {
+		return err
+	}
+	log.Println("Consumer is up and running, waiting for messages...")
 
-		// Declare the queue to ensure it exists
-		_, err := c.ch.QueueDeclare(
-			queueName,
-			true,
-			false,
-			false,
-			false,
-			args,
-		)
+	workersDone := c.startWorkers(jobs)
+	select {
+	case <-ctx.Done():
+		unsubscribe(channel, handlers)
+	case err = <-conn.NotifyClose(make(chan *amqp.Error, 1)):
+	}
+	<-workersDone
+	return err
+}
+
+func (c *Consumer) openChannel(conn *amqp.Connection) (*amqp.Channel, error) {
+	channel, err := conn.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open a channel: %w", err)
+	}
+	if err := rabbitmq.DeclareTopology(channel); err != nil {
+		return nil, err
+	}
+	const prefetchSize, global = 0, false
+	if err := channel.Qos(c.workers, prefetchSize, global); err != nil {
+		return nil, fmt.Errorf("failed to set prefetch: %w", err)
+	}
+	return channel, nil
+}
+
+// subscribe merges every queue into one job stream, which closes once all
+// queues stop delivering (unsubscribed or connection lost).
+func subscribe(channel *amqp.Channel, handlers map[string]deliveryHandler) (<-chan job, error) {
+	jobs := make(chan job)
+	var forwarders sync.WaitGroup
+
+	for queue, handle := range handlers {
+		deliveries, err := consume(channel, queue)
 		if err != nil {
-			return err
+			return nil, err
 		}
-
-		// Consume messages
-		msgs, err := c.ch.Consume(
-			queueName,
-			"",
-			false,
-			false,
-			false,
-			false,
-			nil,
-		)
-		if err != nil {
-			return err
-		}
-
-		// Push messages from each queue into the global msgChannel
-		go func(q string, deliveries <-chan amqp.Delivery) {
-			for d := range deliveries {
-				c.msgChannel <- Message{QueueName: q, Delivery: d}
+		forwarders.Add(1)
+		go func() {
+			defer forwarders.Done()
+			for delivery := range deliveries {
+				jobs <- job{handle: handle, delivery: delivery}
 			}
-		}(queueName, msgs)
+		}()
 	}
 
-	// Start worker goroutines.
-	for i := 0; i < c.workers; i++ {
-		c.wg.Add(1)
-		go c.worker()
-	}
-
-	return nil
+	go func() {
+		forwarders.Wait()
+		close(jobs)
+	}()
+	return jobs, nil
 }
 
-// Process messages from the global msgChannel
-func (c *Consumer) worker() {
-	defer c.wg.Done()
-	for msg := range c.msgChannel {
-		c.processMessage(msg)
+func (c *Consumer) handlersByQueue() map[string]deliveryHandler {
+	handlers := map[string]deliveryHandler{rabbitmq.DeadLetterQueue: logDeadLetter}
+	for _, notificationType := range notification.Types() {
+		handlers[rabbitmq.QueueForType(notificationType)] = c.processor.Process
+	}
+	return handlers
+}
+
+// Each queue is consumed under its own name as the consumer tag, which is what
+// unsubscribe cancels.
+func consume(channel *amqp.Channel, queue string) (<-chan amqp.Delivery, error) {
+	const autoAck, exclusive, noLocal, noWait = false, false, false, false
+	deliveries, err := channel.Consume(queue, queue, autoAck, exclusive, noLocal, noWait, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to consume from %s: %w", queue, err)
+	}
+	return deliveries, nil
+}
+
+// unsubscribe stops new deliveries while keeping the channel open, so
+// in-flight notifications can still be acknowledged.
+func unsubscribe(channel *amqp.Channel, handlers map[string]deliveryHandler) {
+	const noWait = false
+	for queue := range handlers {
+		if err := channel.Cancel(queue, noWait); err != nil {
+			log.Printf("error cancelling consumer for %s: %v", queue, err)
+		}
 	}
 }
 
-// Handle single message with its own context
-func (c *Consumer) processMessage(msg Message) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (c *Consumer) startWorkers(jobs <-chan job) <-chan struct{} {
+	var workers sync.WaitGroup
+	for range c.workers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for queued := range jobs {
+				runJob(queued)
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	return done
+}
+
+// A job outlives shutdown on purpose: an in-flight notification is finished
+// and settled rather than abandoned half-sent.
+func runJob(queued job) {
+	ctx, cancel := context.WithTimeout(context.Background(), processingTimeout)
 	defer cancel()
-
-	// In DLQ, simply log the message for manual intervention
-	if msg.QueueName == "dead_letter_queue" {
-		log.Printf("Received DLQ message: %s", string(msg.Delivery.Body))
-		// Acknowledge the message to remove it from the DLQ
-		if err := msg.Delivery.Ack(false); err != nil {
-			log.Printf("Error acknowledging DLQ message: %v", err)
-		}
-		return
-	}
-
-	// For main queues, unmarshal the message
-	var notifMsg NotificationMessage
-	err := json.Unmarshal(msg.Delivery.Body, &notifMsg)
-	if err != nil {
-		log.Printf("Error unmarshaling message from queue %s: %v", msg.QueueName, err)
-		// Reject the message without requeueing
-		if nackErr := msg.Delivery.Nack(false, false); nackErr != nil {
-			log.Printf("Error sending Nack for queue %s: %v", msg.QueueName, nackErr)
-		}
-		return
-	}
-
-	log.Printf("Processing notification %d from %s", notifMsg.NotificationID, msg.QueueName)
-
-	// Process the message based on which queue it came from
-	switch msg.QueueName {
-	case "queue_email":
-		// TODO: Implement email notification
-		println("Make SendEmailNotification Service")
-	case "queue_sms":
-		// TODO: Implement SMS notification
-		println("Make SendSMSNotification Service")
-	case "queue_push":
-		err = service.SendPushNotification(
-			config.AppConfig.Ntfy.Topic,
-			notifMsg.Title,
-			notifMsg.Priority,
-			notifMsg.Message,
-		)
-	default:
-		log.Printf("Unknown queue: %s", msg.QueueName)
-	}
-
-	if err != nil {
-		log.Printf(
-			"Failed to process notification %d from queue %s: %v",
-			notifMsg.NotificationID,
-			msg.QueueName,
-			err,
-		)
-
-		// For updating the status to "failed"
-		err = c.dbConn.UpdateNotificationStatus(ctx, notifMsg.NotificationID, "failed")
-		if err != nil {
-			log.Printf("Failed updating status: %v", err)
-		}
-
-		// Requeue the message after a short delay
-		time.Sleep(2 * time.Second)
-		err = msg.Delivery.Nack(false, true)
-		if err != nil {
-			log.Printf("Error sending Nack for queue %s: %v", msg.QueueName, err)
-		}
-		return
-	}
-
-	// Update DB status to "sent" on successful processing
-	if err := c.dbConn.UpdateNotificationStatus(ctx, notifMsg.NotificationID, "sent"); err != nil {
-		log.Printf(
-			"Failed to update notification status for notification %d: %v",
-			notifMsg.NotificationID,
-			err,
-		)
-		if err := msg.Delivery.Nack(false, true); err != nil {
-			log.Printf("Error sending Nack for queue %s: %v", msg.QueueName, err)
-		}
-		return
-	}
-
-	// Acknowledge successful processing
-	if err := msg.Delivery.Ack(false); err != nil {
-		log.Printf("Error sending Ack for queue %s: %v", msg.QueueName, err)
-	} else {
-		log.Printf("Notification %d processed and sent from queue %s.", notifMsg.NotificationID, msg.QueueName)
-	}
+	queued.handle(ctx, queued.delivery)
 }
 
-// Stop gracefully shuts down the consumer.
-func (c *Consumer) Stop() {
-	close(c.msgChannel)
-	c.wg.Wait()
+func logDeadLetter(_ context.Context, delivery amqp.Delivery) {
+	log.Printf("Received DLQ message: %s", delivery.Body)
+	acknowledge(delivery)
+}
 
-	if err := c.ch.Close(); err != nil {
-		log.Printf("error closing channel: %v", err)
-	}
-
-	if err := c.conn.Close(); err != nil {
+func closeQuietly(conn *amqp.Connection) {
+	if err := conn.Close(); err != nil && !errors.Is(err, amqp.ErrClosed) {
 		log.Printf("error closing consumer connection: %v", err)
 	}
 }

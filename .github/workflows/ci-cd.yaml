@@ -73,6 +73,7 @@ jobs:
     name: Docker Build & Push
     runs-on: ubuntu-latest
     needs: build-test
+    if: github.event_name == 'push'
 
     steps:
       - name: Checkout repository
