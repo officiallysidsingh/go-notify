@@ -1,4 +1,4 @@
-.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test docker-build lint
+.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test test-services-up test-services-down test-integration docker-build lint
 
 # Variables
 DB_URL := "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
@@ -48,7 +48,16 @@ restart-rabbitmq:
 
 # Run tests
 test:
-	go test ./... -v
+	go test -race ./...
+
+test-services-up:
+	docker compose -f deployments/docker-compose.test.yaml up -d --wait
+
+test-services-down:
+	docker compose -f deployments/docker-compose.test.yaml down -v
+
+test-integration: test-services-up
+	go test -race -tags=integration -count=1 ./internal/integration/...
 
 # Database migrations
 migrate-up:
