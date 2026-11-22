@@ -67,3 +67,15 @@ func TestAllowRestoresExpiryOnCounterLeftWithoutOne(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testWindow, server.TTL("rate:user-1"))
 }
+
+func TestPingSucceedsWhenRedisIsReachable(t *testing.T) {
+	limiter, _ := newTestLimiter(t)
+	require.NoError(t, limiter.Ping(context.Background()))
+}
+
+func TestPingReportsUnreachableRedis(t *testing.T) {
+	server := miniredis.RunT(t)
+	limiter := NewRateLimiter(server.Addr(), 1, time.Minute)
+	server.Close()
+	require.Error(t, limiter.Ping(context.Background()))
+}

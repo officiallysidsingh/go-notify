@@ -52,3 +52,11 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 func (rl *RateLimiter) Close() error {
 	return rl.client.Close()
 }
+
+// Ping verifies the Redis connection is reachable.
+func (rl *RateLimiter) Ping(ctx context.Context) error {
+	if err := rl.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("rate limiter unreachable: %w", err)
+	}
+	return nil
+}
