@@ -16,3 +16,19 @@ func TestIsSettledOnlyForSentAndFailed(t *testing.T) {
 		}
 	}
 }
+
+func TestSupportedTypesIsPushOnly(t *testing.T) {
+	got := SupportedTypes()
+	if len(got) != 1 || got[0] != TypePush {
+		t.Errorf("SupportedTypes() = %v, want [push]", got)
+	}
+}
+
+func TestIsSupportedTypeAcceptsOnlyPush(t *testing.T) {
+	cases := map[string]bool{TypePush: true, TypeEmail: false, TypeSMS: false, "": false}
+	for typ, want := range cases {
+		if got := IsSupportedType(typ); got != want {
+			t.Errorf("IsSupportedType(%q) = %v, want %v", typ, got, want)
+		}
+	}
+}

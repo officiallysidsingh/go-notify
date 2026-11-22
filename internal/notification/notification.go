@@ -27,8 +27,14 @@ func Types() []string {
 	return []string{TypeEmail, TypeSMS, TypePush}
 }
 
+// SupportedTypes lists the types the API accepts. Types() is the wider set
+// used for the queue layout.
+func SupportedTypes() []string {
+	return []string{TypePush}
+}
+
 func IsSupportedType(notificationType string) bool {
-	for _, supported := range Types() {
+	for _, supported := range SupportedTypes() {
 		if notificationType == supported {
 			return true
 		}
