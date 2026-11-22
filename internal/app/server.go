@@ -52,7 +52,8 @@ func RunServer(ctx context.Context, cfg *config.Config, logger *zap.Logger) erro
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", cfg.GRPC.Port)
+	var lc net.ListenConfig
+	listener, err := lc.Listen(ctx, "tcp", cfg.GRPC.Port)
 	if err != nil {
 		closeServerDeps(deps)
 		return fmt.Errorf("listen on %s: %w", cfg.GRPC.Port, err)

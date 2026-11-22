@@ -23,7 +23,7 @@ func fail(context.Context) error { return errors.New("down") }
 
 func serve(m *Monitor) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	m.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil))
 	return rec
 }
 

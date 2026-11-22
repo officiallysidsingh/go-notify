@@ -39,9 +39,9 @@ jobs:
           cache: true
       - run: gofmt -l . | grep . && exit 1 || true
       - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v6.1.1
+      - uses: golangci/golangci-lint-action@v7.0.0
         with:
-          version: v1.60.3
+          version: v2.15.0
 
   generate:
     needs: setup
