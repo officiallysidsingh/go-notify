@@ -24,18 +24,40 @@ services:
       POSTGRES_USER: notify
       POSTGRES_PASSWORD: notify_pass
       POSTGRES_DB: go_notify
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notify -d go_notify"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  migrate:
+    image: ghcr.io/kukymbr/goose-docker:3.24.1
+    # The image's entrypoint wraps goose and is configured through GOOSE_* env.
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
+      GOOSE_COMMAND: up
+    volumes:
+      - ../db/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   grpc-server:
+    image: ${DOCKER_USERNAME:-local}/go-notify-server:${IMAGE_TAG:-dev}
+    restart: unless-stopped
     build:
       context: ../
       dockerfile: deployments/docker/Dockerfile.grpc
     container_name: go-notify-grpc
     environment:
       - GRPC_PORT=:50051
+      - GRPC_REFLECTION=true
+      - AUTH_APIKEYS=local-dev:change-me
       - METRICS_PORT=:9091
-      - RABBITMQ_QUEUE=notifications
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
       - POSTGRES_DATASOURCENAME=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
       - POSTGRES_MAXOPENCONNS=100
@@ -48,12 +70,16 @@ services:
       - REDIS_WINDOW=1m
     ports:
       - "50051:50051"
-      - "9091:9090"
+      - "9091:9091"
     depends_on:
       rabbitmq:
         condition: service_healthy
       postgres:
-        condition: service_started
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "grpc-health-probe", "-addr=:50051"]
       interval: 10s
@@ -61,13 +87,15 @@ services:
       retries: 3
 
   worker:
+    image: ${DOCKER_USERNAME:-local}/go-notify-worker:${IMAGE_TAG:-dev}
+    restart: unless-stopped
     build:
       context: ../
       dockerfile: deployments/docker/Dockerfile.worker
     container_name: go-notify-worker
     environment:
       - NTFY_TOPIC=go-notify-sid
-      - RABBITMQ_QUEUE=notifications
+      - WORKER_METRICSPORT=:9092
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
       - POSTGRES_DATASOURCENAME=postgres://notify:notify_pass@postgres:5432/go_notify?sslmode=disable
       - POSTGRES_MAXOPENCONNS=100
@@ -75,30 +103,39 @@ services:
       - POSTGRES_CONNMAXLIFETIME=20m
       - POSTGRES_CONNMAXIDLETIME=5m
       - POSTGRES_CONNTIMEOUT=3s
+    ports:
+      - "9092:9092"
     depends_on:
       rabbitmq:
         condition: service_healthy
       postgres:
-        condition: service_started
-      grpc-server:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   redis:
     image: redis:7-alpine
     container_name: redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.53.1
     container_name: prometheus
     volumes:
-      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.1.3
     container_name: grafana
     ports:
       - "3000:3000"
@@ -108,7 +145,7 @@ services:
       - prometheus
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.1.0
     container_name: loki
     ports:
       - "3100:3100"

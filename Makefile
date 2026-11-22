@@ -1,4 +1,4 @@
-.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test docker-build
+.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test test-services-up test-services-down test-integration coverage docker-build lint tidy-check
 
 # Variables
 DB_URL := "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
@@ -28,19 +28,20 @@ worker: build
 
 # Generate protobuf code
 proto:
+	mkdir -p $(GENERATED_DIR)
 	protoc --go_out=$(GENERATED_DIR) --go-grpc_out=$(GENERATED_DIR) --go_opt=paths=source_relative --go-grpc_opt=paths=source_relative --proto_path=$(PROTO_PATH) $(PROTO_PATH)/*.proto
 
 # Build Docker images
 docker-build:
-	docker-compose -f ./deployments/docker-compose.yaml build
+	docker compose -f ./deployments/docker-compose.yaml build
 
 # Start Docker containers
 docker-up:
-	docker-compose -f ./deployments/docker-compose.yaml up --build -d && make migrate-up
+	docker compose -f ./deployments/docker-compose.yaml up --build -d --wait
 
 # Stop Docker containers
 docker-down:
-	docker-compose -f ./deployments/docker-compose.yaml down -v
+	docker compose -f ./deployments/docker-compose.yaml down -v
 
 # Restart RabbitMQ
 restart-rabbitmq:
@@ -48,7 +49,22 @@ restart-rabbitmq:
 
 # Run tests
 test:
-	go test ./tests -v
+	go test -race ./...
+
+test-services-up:
+	docker compose -f deployments/docker-compose.test.yaml up -d --wait
+
+test-services-down:
+	docker compose -f deployments/docker-compose.test.yaml down -v
+
+test-integration: test-services-up
+	go test -race -tags=integration -count=1 ./internal/integration/...
+
+COVER_PKGS := ./config/...,./internal/...
+
+coverage: test-services-up
+	go test -race -tags=integration -count=1 -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out ./...
+	./scripts/check-coverage.sh coverage.out
 
 # Database migrations
 migrate-up:
@@ -63,4 +79,11 @@ clean:
 
 # Lint
 lint:
+	gofmt -l . | tee /dev/stderr | if [ -s /dev/stdin ]; then false; else true; fi
+	go vet ./...
 	golangci-lint run
+
+# Fail when go.mod or go.sum are not tidy
+tidy-check:
+	go mod tidy
+	git diff --exit-code go.mod go.sum

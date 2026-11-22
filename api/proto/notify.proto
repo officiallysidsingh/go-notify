@@ -4,29 +4,52 @@ package notify;
 
 option go_package = "github.com/officiallysidsingh/go-notify/api/generated";
 
+// NotificationService accepts notifications from backend callers and reports
+// their delivery status. Every call requires an x-api-key metadata header.
 service NotificationService {
+  // SendNotification validates, stores and queues a notification for delivery.
+  // Errors are reported through the gRPC status code.
   rpc SendNotification (NotificationRequest) returns (NotificationResponse);
+
+  // GetNotificationStatus returns the current status of a notification.
   rpc GetNotificationStatus (StatusRequest) returns (StatusResponse);
 }
 
+// NotificationRequest describes one notification to deliver.
 message NotificationRequest {
+  // Recipient identifier. Required, at most 255 bytes, no control characters.
+  // Also the key for per-user rate limiting.
   string user_id = 1;
+  // Optional title, at most 250 bytes, no control characters.
   string title = 2;
+  // Optional ntfy priority: empty or "1" to "5".
   string priority = 3;
+  // Notification body. Required, at most 4096 bytes.
   string message = 4;
+  // Delivery channel. Only "push" is supported.
   string type = 5;
 }
 
+// NotificationResponse is returned once a notification has been queued.
 message NotificationResponse {
-  bool success = 1;
-  string error = 2;
+  // Deprecated: always true on OK; check the gRPC status code instead.
+  bool success = 1 [deprecated = true];
+  // Deprecated: check the gRPC status code instead.
+  string error = 2 [deprecated = true];
+  // ID to pass to GetNotificationStatus.
+  int64 notification_id = 3;
 }
 
+// StatusRequest identifies the notification to look up.
 message StatusRequest {
-  int32 notification_id = 1;
+  // ID returned by SendNotification. Must be positive.
+  int64 notification_id = 1;
 }
 
+// StatusResponse reports a notification's state.
 message StatusResponse {
+  // One of "pending", "queued", "sent" or "failed".
   string status = 1;
-  string error = 2;
+  // Deprecated: check the gRPC status code instead.
+  string error = 2 [deprecated = true];
 }
