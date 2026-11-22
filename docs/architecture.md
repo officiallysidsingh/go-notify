@@ -53,7 +53,8 @@ Delivery is **at-least-once**. Duplicates can happen if:
 
 | Failure | Caller sees | Recovery |
 |---|---|---|
-| Postgres down | `Unavailable` at insert time | Reconnect on next request |
+| Postgres unreachable | Health reports `NOT_SERVING` (Ping fails), so the load balancer stops routing | Reconnects on next request; health flips back |
+| Postgres error mid-request | `Internal` (driver text is logged, not returned) | Caller retries |
 | Redis down | `Unavailable` (fails closed) | Reconnect on next request; health flips |
 | RabbitMQ down | `Unavailable` at publish | Row stays `pending`; sweep republishes once broker returns |
 | ntfy error | row goes to `failed` -> dead_letter_queue after retries | Manual inspection via management API |
