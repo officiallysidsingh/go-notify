@@ -84,7 +84,7 @@ func (s *Sweeper) giveUp(ctx context.Context, row repository.StaleNotification) 
 
 func (s *Sweeper) republish(ctx context.Context, row repository.StaleNotification) {
 	id := zap.Int64("notification_id", row.NotificationID)
-	body := row.Message.JSON()
+	body := row.JSON()
 	if err := s.publisher.Publish(ctx, rabbitmq.NotificationExchange, row.Type, body); err != nil {
 		s.logger.Warn("failed to republish notification", id, zap.Error(err))
 		s.metrics.SweepFailures.Inc()
