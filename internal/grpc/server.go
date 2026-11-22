@@ -22,7 +22,7 @@ type Publisher interface {
 }
 
 type NotificationStore interface {
-	InsertNotification(ctx context.Context, userID, message, status string) (int64, error)
+	InsertNotification(ctx context.Context, message notification.Message) (int64, error)
 	UpdateNotificationStatus(ctx context.Context, id int64, status string) error
 	GetNotificationStatus(ctx context.Context, id int64) (string, error)
 }
@@ -76,7 +76,13 @@ func (s *NotificationServer) SendNotification(
 	notificationsReceived.Inc()
 
 	notificationID, err := s.store.InsertNotification(
-		ctx, req.UserId, req.Message, notification.StatusPending,
+		ctx, notification.Message{
+			UserID:   req.UserId,
+			Title:    req.Title,
+			Priority: req.Priority,
+			Message:  req.Message,
+			Type:     req.Type,
+		},
 	)
 	if err != nil {
 		log.Printf("Failed to store notification for user %s: %v", req.UserId, err)

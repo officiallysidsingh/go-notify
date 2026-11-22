@@ -24,12 +24,12 @@ type fakeStore struct {
 	statuses  map[int64]string
 }
 
-func (s *fakeStore) InsertNotification(_ context.Context, _, _, status string) (int64, error) {
+func (s *fakeStore) InsertNotification(_ context.Context, _ notification.Message) (int64, error) {
 	if s.insertErr != nil {
 		return 0, s.insertErr
 	}
 	s.inserted++
-	s.statuses[storedNotificationID] = status
+	s.statuses[storedNotificationID] = notification.StatusPending
 	return storedNotificationID, nil
 }
 
