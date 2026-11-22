@@ -72,7 +72,7 @@ func (s *NotificationServer) SendNotification(
 	}
 	s.markQueued(ctx, notificationID)
 
-	return &pb.NotificationResponse{Success: true, NotificationId: notificationID}, nil
+	return &pb.NotificationResponse{Success: true, NotificationId: notificationID}, nil //nolint:staticcheck // deprecated field kept populated
 }
 
 func (s *NotificationServer) checkRateLimit(ctx context.Context, userID string) error {
