@@ -28,7 +28,7 @@ const reconnectDelay = 5 * time.Second
 // consumer and shuts down. It returns a startup error, or nil after a clean
 // shutdown.
 func RunWorker(ctx context.Context, cfg *config.Config, logger *zap.Logger) error {
-	db, err := repository.NewDB(cfg.Postgres)
+	db, err := repository.NewDB(ctx, cfg.Postgres)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
@@ -56,7 +56,7 @@ func RunWorker(ctx context.Context, cfg *config.Config, logger *zap.Logger) erro
 	logger.Info("shutting down worker")
 	cancelRun()
 	wg.Wait()
-	shutdownHTTP(httpServer)
+	shutdownHTTP(ctx, httpServer)
 	_ = db.Close()
 	if runErr == nil {
 		select {

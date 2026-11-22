@@ -39,7 +39,7 @@ func TestStartServerGoroutinesReportsGRPCServeFailure(t *testing.T) {
 		Health:  config.HealthConfig{Interval: time.Hour},
 	}
 	logger := zap.NewNop()
-	deps, err := buildServerDeps(cfg, logger)
+	deps, err := buildServerDeps(context.Background(), cfg, logger)
 	require.NoError(t, err)
 
 	// Serving on a listener that is already closed makes Serve fail at once.
@@ -60,5 +60,5 @@ func TestStartServerGoroutinesReportsGRPCServeFailure(t *testing.T) {
 
 	cancel()
 	wg.Wait()
-	shutdownServer(deps, httpServer)
+	shutdownServer(context.Background(), deps, httpServer)
 }

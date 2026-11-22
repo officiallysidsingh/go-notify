@@ -72,6 +72,19 @@ func (m *Monitor) Run(ctx context.Context, onChange func(healthy bool)) {
 }
 
 func (m *Monitor) runOnce(ctx context.Context) {
+	failing := m.collect(ctx)
+	newlyFailing, recovered := m.record(failing)
+	for name, err := range newlyFailing {
+		m.logger.Error("health check failing", zap.String("check", name), zap.Error(err))
+	}
+	for _, name := range recovered {
+		m.logger.Info("health check recovered", zap.String("check", name))
+	}
+}
+
+// collect runs every check concurrently and returns the failing ones. A check
+// still running when the pass interval elapses counts as failing.
+func (m *Monitor) collect(ctx context.Context) map[string]error {
 	var (
 		wg       sync.WaitGroup
 		resultMu sync.Mutex
@@ -98,27 +111,38 @@ func (m *Monitor) runOnce(ctx context.Context) {
 		}()
 	}
 
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	timer := time.NewTimer(m.interval)
-	select {
-	case <-done:
-		timer.Stop()
-	case <-timer.C:
-	}
+	waitFor(&wg, m.interval)
 
 	resultMu.Lock()
+	defer resultMu.Unlock()
 	closed = true
 	for name := range m.checks {
 		if !finished[name] {
 			failing[name] = errCheckTimedOut
 		}
 	}
-	resultMu.Unlock()
+	return failing
+}
 
+// waitFor blocks until wg is done or d elapses, whichever comes first.
+func waitFor(wg *sync.WaitGroup, d time.Duration) {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
+// record stores the pass result and reports which checks started failing and
+// which recovered since the previous pass.
+func (m *Monitor) record(failing map[string]error) (map[string]error, []string) {
 	var newlyFailing map[string]error
 	var recovered []string
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	for name, err := range failing {
 		if _, was := m.failing[name]; !was {
 			if newlyFailing == nil {
@@ -135,14 +159,7 @@ func (m *Monitor) runOnce(ctx context.Context) {
 	m.failing = failing
 	m.healthy = len(failing) == 0
 	m.firstDone = true
-	m.mu.Unlock()
-
-	for name, err := range newlyFailing {
-		m.logger.Error("health check failing", zap.String("check", name), zap.Error(err))
-	}
-	for _, name := range recovered {
-		m.logger.Info("health check recovered", zap.String("check", name))
-	}
+	return newlyFailing, recovered
 }
 
 // Healthy is false until the first pass completes and while any check fails.

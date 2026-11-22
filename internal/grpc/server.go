@@ -116,7 +116,7 @@ func (s *NotificationServer) enqueueNotification(
 		zap.Int64("notification_id", notificationID),
 		zap.Error(err),
 	)
-	s.markFailed(notificationID)
+	s.markFailed(ctx, notificationID)
 	return status.Error(codes.Unavailable, "failed to enqueue notification")
 }
 
@@ -142,8 +142,8 @@ func (s *NotificationServer) markQueued(ctx context.Context, notificationID int6
 
 // The request context may already be cancelled when enqueueing fails, so the
 // status update runs on its own context.
-func (s *NotificationServer) markFailed(notificationID int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), statusUpdateTimeout)
+func (s *NotificationServer) markFailed(parent context.Context, notificationID int64) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), statusUpdateTimeout)
 	defer cancel()
 
 	err := s.deps.Store.UpdateNotificationStatus(ctx, notificationID, notification.StatusFailed)

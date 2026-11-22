@@ -94,7 +94,7 @@ func (c *Consumer) runSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	workers := c.startWorkers(subscription.streams)
+	workers := c.startWorkers(ctx, subscription.streams)
 	c.connected.Store(true)
 	c.logger.Info("consumer is up and running, waiting for messages")
 
@@ -108,8 +108,19 @@ func (c *Consumer) runSession(ctx context.Context) error {
 		c.connected.Store(false)
 		c.metrics.Reconnects.Inc()
 		workers.shutdown(true)
-		return fmt.Errorf("lost broker connection: %v", lost)
+		return fmt.Errorf("lost broker connection: %w", lostCause(lost))
 	}
+}
+
+// errConnectionClosed stands in for the cause when the broker closes the
+// connection without sending an error.
+var errConnectionClosed = errors.New("connection closed")
+
+func lostCause(lost *amqp.Error) error {
+	if lost == nil {
+		return errConnectionClosed
+	}
+	return *lost
 }
 
 type subscription struct {
@@ -183,11 +194,11 @@ type workerPool struct {
 	cancelWork context.CancelCauseFunc
 }
 
-func (c *Consumer) startWorkers(streams []<-chan amqp.Delivery) *workerPool {
+func (c *Consumer) startWorkers(ctx context.Context, streams []<-chan amqp.Delivery) *workerPool {
 	// In-flight work outlives shutdown on purpose: a notification is finished
 	// and settled rather than abandoned half-sent. Only losing the connection
 	// cancels the session; each delivery also gets its own timeout.
-	sessionCtx, cancel := context.WithCancelCause(context.Background())
+	sessionCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	pool := &workerPool{
 		merged:     make(chan amqp.Delivery),
 		stop:       make(chan struct{}),
@@ -200,16 +211,19 @@ func (c *Consumer) startWorkers(streams []<-chan amqp.Delivery) *workerPool {
 	}
 	for range c.opts.Workers {
 		pool.workers.Add(1)
-		go func() {
-			defer pool.workers.Done()
-			for delivery := range pool.merged {
-				jobCtx, cancelJob := context.WithTimeout(pool.sessionCtx, c.opts.JobTimeout)
-				c.processor.Process(jobCtx, delivery)
-				cancelJob()
-			}
-		}()
+		go c.work(sessionCtx, pool)
 	}
 	return pool
+}
+
+// work processes merged deliveries until the pool closes them.
+func (c *Consumer) work(ctx context.Context, pool *workerPool) {
+	defer pool.workers.Done()
+	for delivery := range pool.merged {
+		jobCtx, cancelJob := context.WithTimeout(ctx, c.opts.JobTimeout)
+		c.processor.Process(jobCtx, delivery)
+		cancelJob()
+	}
 }
 
 func (p *workerPool) forward(stream <-chan amqp.Delivery) {

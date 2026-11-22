@@ -15,6 +15,11 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run returns the process exit code so deferred cleanup runs before os.Exit.
+func run() int {
 	cfg, err := config.Load("./config")
 	exitOn(err)
 	exitOn(cfg.ValidateWorker())
@@ -30,8 +35,9 @@ func main() {
 		logger.Error("worker exited with error", zap.Error(err))
 		stop()
 		_ = logger.Sync()
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // exitOn reports a startup error on stderr (the logger is not up yet) and exits.

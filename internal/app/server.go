@@ -48,7 +48,7 @@ type serverDeps struct {
 // RunServer runs the gRPC server until ctx is cancelled, then shuts down
 // cleanly. It returns the first startup error, or nil after a clean shutdown.
 func RunServer(ctx context.Context, cfg *config.Config, logger *zap.Logger) error {
-	deps, err := buildServerDeps(cfg, logger)
+	deps, err := buildServerDeps(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -70,18 +70,18 @@ func RunServer(ctx context.Context, cfg *config.Config, logger *zap.Logger) erro
 	logger.Info("shutting down server")
 	cancelRun()
 	wg.Wait() // monitor and sweeper stop using deps before they are closed
-	shutdownServer(deps, httpServer)
+	shutdownServer(ctx, deps, httpServer)
 	return runErr
 }
 
-func buildServerDeps(cfg *config.Config, logger *zap.Logger) (*serverDeps, error) {
+func buildServerDeps(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*serverDeps, error) {
 	// The key ring is parsed before any connection is opened so that a bad
 	// auth.apiKeys fails fast without needing live services.
 	authInterceptor, err := buildAuthInterceptor(cfg.Auth)
 	if err != nil {
 		return nil, err
 	}
-	db, err := repository.NewDB(cfg.Postgres)
+	db, err := repository.NewDB(ctx, cfg.Postgres)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
@@ -202,15 +202,15 @@ func setServing(h *health.Server, healthy bool) {
 	h.SetServingStatus("", status)
 }
 
-func shutdownServer(deps *serverDeps, httpServer *http.Server) {
+func shutdownServer(ctx context.Context, deps *serverDeps, httpServer *http.Server) {
 	setServing(deps.health, false)
 	deps.grpc.GracefulStop()
-	shutdownHTTP(httpServer)
+	shutdownHTTP(ctx, httpServer)
 	closeServerDeps(deps)
 }
 
-func shutdownHTTP(server *http.Server) {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+func shutdownHTTP(parent context.Context, server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), shutdownTimeout)
 	defer cancel()
 	_ = server.Shutdown(ctx)
 }
