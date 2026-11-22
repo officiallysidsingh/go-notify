@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -56,11 +57,21 @@ func RunServer(ctx context.Context, cfg *config.Config, logger *zap.Logger) erro
 		closeServerDeps(deps)
 		return fmt.Errorf("listen on %s: %w", cfg.GRPC.Port, err)
 	}
-	httpServer := startServerGoroutines(ctx, cfg, logger, deps, listener)
-	<-ctx.Done()
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	var wg sync.WaitGroup
+	httpServer, serveErr := startServerGoroutines(runCtx, &wg, cfg, logger, deps, listener)
+
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case runErr = <-serveErr:
+	}
 	logger.Info("shutting down server")
+	cancelRun()
+	wg.Wait() // monitor and sweeper stop using deps before they are closed
 	shutdownServer(deps, httpServer)
-	return nil
+	return runErr
 }
 
 func buildServerDeps(cfg *config.Config, logger *zap.Logger) (*serverDeps, error) {
@@ -105,6 +116,8 @@ func buildAuthInterceptor(cfg config.AuthConfig) (grpc.UnaryServerInterceptor, e
 	), nil
 }
 
+// newRegistry returns a registry with the Go and process collectors, shared by
+// the server and the worker.
 func newRegistry() *prometheus.Registry {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
@@ -136,38 +149,49 @@ func buildGRPCServer(cfg *config.Config, logger *zap.Logger, deps *serverDeps, a
 	return server
 }
 
-func startServerGoroutines(ctx context.Context, cfg *config.Config, logger *zap.Logger, deps *serverDeps, listener net.Listener) *http.Server {
+func startServerGoroutines(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config, logger *zap.Logger, deps *serverDeps, listener net.Listener) (*http.Server, <-chan error) {
 	httpServer := &http.Server{
 		Addr:              cfg.Metrics.Port,
 		Handler:           metricsMux(deps.registry),
 		ReadHeaderTimeout: shutdownTimeout,
 	}
-	go serveHTTP(httpServer, logger)
+	serveErr := make(chan error, 2)
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- fmt.Errorf("metrics server on %s: %w", httpServer.Addr, err)
+		}
+	}()
 	monitor := healthmon.NewMonitor(map[string]healthmon.Check{
 		"postgres": deps.db.Ping,
 		"redis":    deps.limiter.Ping,
 		"rabbitmq": deps.publisher.Ping,
 	}, cfg.Health.Interval, logger)
-	go monitor.Run(ctx, func(healthy bool) { setServing(deps.health, healthy) })
-	go sweeper.New(deps.db, deps.publisher, cfg.Sweep, deps.metrics, logger).Run(ctx)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		monitor.Run(ctx, func(healthy bool) {
+			// A flip racing with shutdown must not mark the server SERVING.
+			if ctx.Err() == nil {
+				setServing(deps.health, healthy)
+			}
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		sweeper.New(deps.db, deps.publisher, cfg.Sweep, deps.metrics, logger).Run(ctx)
+	}()
 	go func() {
 		if err := deps.grpc.Serve(listener); err != nil {
-			logger.Error("gRPC server stopped", zap.Error(err))
+			serveErr <- fmt.Errorf("gRPC serve: %w", err)
 		}
 	}()
-	return httpServer
+	return httpServer, serveErr
 }
 
 func metricsMux(registry *prometheus.Registry) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	return mux
-}
-
-func serveHTTP(server *http.Server, logger *zap.Logger) {
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("HTTP server failed", zap.String("addr", server.Addr), zap.Error(err))
-	}
 }
 
 func setServing(h *health.Server, healthy bool) {
