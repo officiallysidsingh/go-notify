@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,17 +32,39 @@ func RunWorker(ctx context.Context, cfg *config.Config, logger *zap.Logger) erro
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
-	registry := prometheus.NewRegistry()
+	registry := newRegistry()
 	workerMetrics := metrics.NewWorker(registry)
 	c := buildConsumer(cfg, db, workerMetrics, logger)
-	httpServer := startWorkerHTTP(ctx, cfg, logger, db, c, registry)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	var wg sync.WaitGroup
+	httpServer, serveErr := startWorkerHTTP(runCtx, &wg, cfg, logger, db, c, registry)
 
-	c.Run(ctx)
+	// A failed HTTP listener cancels the run so the consumer stops too.
+	var runErr error
+	done := make(chan struct{})
+	go func() {
+		select {
+		case runErr = <-serveErr:
+			cancelRun()
+		case <-done:
+		}
+	}()
+	c.Run(runCtx)
+	close(done)
 
 	logger.Info("shutting down worker")
+	cancelRun()
+	wg.Wait()
 	shutdownHTTP(httpServer)
 	_ = db.Close()
-	return nil
+	if runErr == nil {
+		select {
+		case runErr = <-serveErr:
+		default:
+		}
+	}
+	return runErr
 }
 
 func buildConsumer(cfg *config.Config, db *repository.DB, m *metrics.Worker, logger *zap.Logger) *consumer.Consumer {
@@ -60,7 +83,7 @@ func buildConsumer(cfg *config.Config, db *repository.DB, m *metrics.Worker, log
 	}, processor, m, logger)
 }
 
-func startWorkerHTTP(ctx context.Context, cfg *config.Config, logger *zap.Logger, db *repository.DB, c *consumer.Consumer, registry *prometheus.Registry) *http.Server {
+func startWorkerHTTP(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config, logger *zap.Logger, db *repository.DB, c *consumer.Consumer, registry *prometheus.Registry) (*http.Server, <-chan error) {
 	monitor := healthmon.NewMonitor(map[string]healthmon.Check{
 		"postgres": db.Ping,
 		"consumer": func(context.Context) error {
@@ -74,7 +97,16 @@ func startWorkerHTTP(ctx context.Context, cfg *config.Config, logger *zap.Logger
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	mux.Handle("/healthz", monitor.Handler())
 	server := &http.Server{Addr: cfg.Worker.MetricsPort, Handler: mux, ReadHeaderTimeout: shutdownTimeout}
-	go serveHTTP(server, logger)
-	go monitor.Run(ctx, func(bool) {})
-	return server
+	serveErr := make(chan error, 1)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- fmt.Errorf("worker HTTP server on %s: %w", server.Addr, err)
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		monitor.Run(ctx, func(bool) {})
+	}()
+	return server, serveErr
 }
