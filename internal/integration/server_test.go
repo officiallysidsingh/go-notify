@@ -80,6 +80,6 @@ func TestMetricsEndpointExposesRequestCounter(t *testing.T) {
 
 	body := httpGetBody(t, "http://127.0.0.1"+s.cfg.Metrics.Port+"/metrics")
 
-	assert.Contains(t, body, `gonotify_grpc_requests_total{caller="",code="OK",method="/notify.NotificationService/SendNotification"} 1`)
+	assert.Contains(t, body, `gonotify_grpc_requests_total{caller="test-client",code="OK",method="/notify.NotificationService/SendNotification"} 1`)
 	assert.Contains(t, body, "notifications_received_total 1")
 }

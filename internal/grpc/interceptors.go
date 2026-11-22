@@ -14,10 +14,12 @@ import (
 )
 
 // MetricsInterceptor records request count and duration per method. Chain it
-// outside the auth interceptor; requests rejected by auth carry an empty caller.
+// outside the auth interceptor; it installs the caller holder so the caller set
+// by auth is visible here. Requests rejected by auth carry an empty caller.
 func MetricsInterceptor(m *metrics.Server) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
+		ctx = auth.EnsureCallerContext(ctx)
 		resp, err := handler(ctx, req)
 		m.Requests.WithLabelValues(
 			info.FullMethod, auth.CallerFromContext(ctx), status.Code(err).String(),
@@ -32,6 +34,7 @@ func MetricsInterceptor(m *metrics.Server) grpc.UnaryServerInterceptor {
 func LoggingInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
+		ctx = auth.EnsureCallerContext(ctx)
 		resp, err := handler(ctx, req)
 		code := status.Code(err)
 		log := logger.Info

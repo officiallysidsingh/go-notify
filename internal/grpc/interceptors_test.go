@@ -53,7 +53,7 @@ func chain(outer, inner grpc.UnaryServerInterceptor, handler grpc.UnaryHandler) 
 
 func TestMetricsInterceptorCountsRequestByCallerAndCode(t *testing.T) {
 	m := metrics.NewServer(prometheus.NewRegistry())
-	handler := chain(auth.AllowAll(), MetricsInterceptor(m), returning(status.Error(codes.NotFound, "x")))
+	handler := chain(MetricsInterceptor(m), auth.AllowAll(), returning(status.Error(codes.NotFound, "x")))
 
 	_, err := handler(context.Background(), nil)
 
@@ -65,7 +65,7 @@ func TestMetricsInterceptorUsesCallerFromContext(t *testing.T) {
 	m := metrics.NewServer(prometheus.NewRegistry())
 	keys, err := auth.ParseKeys("billing:secret")
 	require.NoError(t, err)
-	handler := chain(auth.UnaryInterceptor(keys), MetricsInterceptor(m), returning(nil))
+	handler := chain(MetricsInterceptor(m), auth.UnaryInterceptor(keys), returning(nil))
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(auth.MetadataKey, "secret"))
 
 	_, err = handler(ctx, nil)
@@ -110,7 +110,7 @@ func newObservedLogger() (*zap.Logger, *observer.ObservedLogs) {
 
 func TestLoggingInterceptorLogsMethodCallerAndCode(t *testing.T) {
 	logger, logs := newObservedLogger()
-	handler := chain(auth.AllowAll(), LoggingInterceptor(logger), returning(nil))
+	handler := chain(LoggingInterceptor(logger), auth.AllowAll(), returning(nil))
 
 	_, err := handler(context.Background(), nil)
 
