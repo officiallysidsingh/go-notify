@@ -96,6 +96,9 @@ func (s *Sweeper) republish(ctx context.Context, row repository.StaleNotificatio
 		s.metrics.SweepFailures.Inc()
 		return
 	}
+	// MarkQueued failure is non-fatal: the row stays `pending` and the next
+	// sweep pass republishes it. The consumer's IsSettled check absorbs the
+	// duplicate so the notification is delivered once.
 	if err := s.store.MarkQueued(ctx, row.NotificationID); err != nil {
 		s.logger.Warn("republished but failed to mark queued", id, zap.Error(err))
 	}
