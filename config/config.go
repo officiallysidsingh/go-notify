@@ -1,7 +1,8 @@
 package config
 
 import (
-	"log"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -9,7 +10,13 @@ import (
 )
 
 type GRPCConfig struct {
-	Port string
+	Port       string
+	Reflection bool
+}
+
+type AuthConfig struct {
+	APIKeys  string
+	Disabled bool
 }
 
 type RabbitMQConfig struct {
@@ -28,7 +35,7 @@ type PostgresConfig struct {
 type RedisConfig struct {
 	Addr   string
 	Limit  int
-	Window string
+	Window time.Duration
 }
 
 type MetricsConfig struct {
@@ -40,70 +47,139 @@ type LoggingConfig struct {
 }
 
 type NtfyConfig struct {
-	Topic string
+	BaseURL string
+	Topic   string
+	Token   string
+	Timeout time.Duration
 }
 
-// Holds all configuration values.
+type WorkerConfig struct {
+	Concurrency  int
+	SendAttempts int
+	RetryDelay   time.Duration
+	MetricsPort  string
+}
+
+type SweepConfig struct {
+	Interval    time.Duration
+	StaleAfter  time.Duration
+	BatchSize   int
+	MaxAttempts int
+}
+
+type HealthConfig struct {
+	Interval time.Duration
+}
+
+// Config holds all configuration values.
 type Config struct {
 	GRPC     GRPCConfig
+	Auth     AuthConfig
 	RabbitMQ RabbitMQConfig
 	Postgres PostgresConfig
 	Redis    RedisConfig
 	Metrics  MetricsConfig
 	Logging  LoggingConfig
 	Ntfy     NtfyConfig
+	Worker   WorkerConfig
+	Sweep    SweepConfig
+	Health   HealthConfig
 }
 
 const defaultPostgresConnTimeout = 5 * time.Second
 
-// Global config instance
-var AppConfig *Config
+func setDefaults(v *viper.Viper) {
+	v.SetDefault("grpc.reflection", false)
+	v.SetDefault("auth.apiKeys", "")
+	v.SetDefault("auth.disabled", false)
+	v.SetDefault("logging.level", "info")
+	v.SetDefault("ntfy.baseURL", "https://ntfy.sh")
+	v.SetDefault("ntfy.token", "")
+	v.SetDefault("ntfy.timeout", 10*time.Second)
+	v.SetDefault("worker.concurrency", 10)
+	v.SetDefault("worker.sendAttempts", 3)
+	v.SetDefault("worker.retryDelay", 2*time.Second)
+	v.SetDefault("worker.metricsPort", ":9092")
+	v.SetDefault("sweep.interval", time.Minute)
+	v.SetDefault("sweep.staleAfter", 5*time.Minute)
+	v.SetDefault("sweep.batchSize", 100)
+	v.SetDefault("sweep.maxAttempts", 3)
+	v.SetDefault("health.interval", 10*time.Second)
+	v.SetDefault("postgres.ConnTimeout", defaultPostgresConnTimeout)
+}
 
-// Load config
-func LoadConfig(path string) {
-	// A fresh instance keeps repeated loads from seeing each other's search paths.
-	settings := viper.New()
-	settings.SetDefault("postgres.ConnTimeout", defaultPostgresConnTimeout)
-	settings.SetConfigName("config")
-	settings.SetConfigType("yaml")
-	settings.AddConfigPath(path)
+// Load reads config.yaml from path, with environment variables overriding file
+// values. A missing file is fine; an unreadable or invalid file is an error.
+func Load(path string) (*Config, error) {
+	// A fresh instance keeps repeated loads from seeing each other's state.
+	v := viper.New()
+	setDefaults(v)
+	v.SetConfigName("config")
+	v.SetConfigType("yaml")
+	v.AddConfigPath(path)
 
 	// Allow overriding with env variables
-	settings.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	settings.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
-	if err := settings.ReadInConfig(); err != nil {
-		log.Printf("No config file found: %v", err)
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
 	}
 
-	AppConfig = &Config{
+	return &Config{
 		GRPC: GRPCConfig{
-			Port: settings.GetString("grpc.port"),
+			Port:       v.GetString("grpc.port"),
+			Reflection: v.GetBool("grpc.reflection"),
+		},
+		Auth: AuthConfig{
+			APIKeys:  v.GetString("auth.apiKeys"),
+			Disabled: v.GetBool("auth.disabled"),
 		},
 		RabbitMQ: RabbitMQConfig{
-			URL: settings.GetString("rabbitmq.url"),
+			URL: v.GetString("rabbitmq.url"),
 		},
 		Postgres: PostgresConfig{
-			DataSourceName:  settings.GetString("postgres.DataSourceName"),
-			MaxOpenConns:    settings.GetInt("postgres.MaxOpenConns"),
-			MaxIdleConns:    settings.GetInt("postgres.MaxIdleConns"),
-			ConnMaxLifetime: settings.GetDuration("postgres.ConnMaxLifetime"),
-			ConnMaxIdleTime: settings.GetDuration("postgres.ConnMaxIdleTime"),
-			ConnTimeout:     settings.GetDuration("postgres.ConnTimeout"),
+			DataSourceName:  v.GetString("postgres.DataSourceName"),
+			MaxOpenConns:    v.GetInt("postgres.MaxOpenConns"),
+			MaxIdleConns:    v.GetInt("postgres.MaxIdleConns"),
+			ConnMaxLifetime: v.GetDuration("postgres.ConnMaxLifetime"),
+			ConnMaxIdleTime: v.GetDuration("postgres.ConnMaxIdleTime"),
+			ConnTimeout:     v.GetDuration("postgres.ConnTimeout"),
 		},
 		Redis: RedisConfig{
-			Addr:   settings.GetString("redis.addr"),
-			Limit:  settings.GetInt("redis.limit"),
-			Window: settings.GetString("redis.window"),
+			Addr:   v.GetString("redis.addr"),
+			Limit:  v.GetInt("redis.limit"),
+			Window: v.GetDuration("redis.window"),
 		},
 		Metrics: MetricsConfig{
-			Port: settings.GetString("metrics.port"),
+			Port: v.GetString("metrics.port"),
 		},
 		Logging: LoggingConfig{
-			Level: settings.GetString("logging.level"),
+			Level: v.GetString("logging.level"),
 		},
 		Ntfy: NtfyConfig{
-			Topic: settings.GetString("ntfy.topic"),
+			BaseURL: v.GetString("ntfy.baseURL"),
+			Topic:   v.GetString("ntfy.topic"),
+			Token:   v.GetString("ntfy.token"),
+			Timeout: v.GetDuration("ntfy.timeout"),
 		},
-	}
+		Worker: WorkerConfig{
+			Concurrency:  v.GetInt("worker.concurrency"),
+			SendAttempts: v.GetInt("worker.sendAttempts"),
+			RetryDelay:   v.GetDuration("worker.retryDelay"),
+			MetricsPort:  v.GetString("worker.metricsPort"),
+		},
+		Sweep: SweepConfig{
+			Interval:    v.GetDuration("sweep.interval"),
+			StaleAfter:  v.GetDuration("sweep.staleAfter"),
+			BatchSize:   v.GetInt("sweep.batchSize"),
+			MaxAttempts: v.GetInt("sweep.maxAttempts"),
+		},
+		Health: HealthConfig{
+			Interval: v.GetDuration("health.interval"),
+		},
+	}, nil
 }

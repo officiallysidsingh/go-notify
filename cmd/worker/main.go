@@ -22,12 +22,15 @@ const (
 )
 
 func main() {
-	config.LoadConfig("./config")
+	cfg, err := config.Load("./config")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	database, err := repository.NewDB(config.AppConfig.Postgres)
+	database, err := repository.NewDB(cfg.Postgres)
 	if err != nil {
 		log.Fatalf("Failed to initialize PostgresDB: %v", err)
 	}
@@ -41,12 +44,12 @@ func main() {
 	// those notifications instead of reporting them as sent.
 	senders := map[string]consumer.Sender{
 		notification.TypePush: service.NewNtfySender(
-			service.NtfyBaseURL, config.AppConfig.Ntfy.Topic, pushSendTimeout,
+			service.NtfyBaseURL, cfg.Ntfy.Topic, pushSendTimeout,
 		),
 	}
 	retry := consumer.RetryPolicy{MaxAttempts: sendAttempts, Delay: sendRetryDelay}
 	processor := consumer.NewProcessor(database, senders, retry)
 
-	consumer.NewConsumer(config.AppConfig.RabbitMQ.URL, workerCount, processor).Run(ctx)
+	consumer.NewConsumer(cfg.RabbitMQ.URL, workerCount, processor).Run(ctx)
 	log.Println("Worker stopped")
 }

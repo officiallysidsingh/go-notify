@@ -16,8 +16,9 @@ func loadExampleConfig(t *testing.T) *Config {
 	require.NoError(t, err)
 	configDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), example, 0o600))
-	LoadConfig(configDir)
-	return AppConfig
+	cfg, err := Load(configDir)
+	require.NoError(t, err)
+	return cfg
 }
 
 func TestExampleConfigDefinesPostgresDurations(t *testing.T) {
@@ -28,8 +29,38 @@ func TestExampleConfigDefinesPostgresDurations(t *testing.T) {
 	assert.Equal(t, 3*time.Second, postgres.ConnTimeout)
 }
 
-func TestLoadConfigDefaultsPostgresConnTimeout(t *testing.T) {
-	LoadConfig(t.TempDir())
+func TestLoadAppliesDefaults(t *testing.T) {
+	cfg, err := Load(t.TempDir())
+	require.NoError(t, err)
 
-	assert.Equal(t, defaultPostgresConnTimeout, AppConfig.Postgres.ConnTimeout)
+	assert.Equal(t, "https://ntfy.sh", cfg.Ntfy.BaseURL)
+	assert.Equal(t, 5*time.Minute, cfg.Sweep.StaleAfter)
+	assert.Equal(t, 10, cfg.Worker.Concurrency)
+	assert.False(t, cfg.GRPC.Reflection)
+	assert.Equal(t, defaultPostgresConnTimeout, cfg.Postgres.ConnTimeout)
+}
+
+func TestLoadReadsEnvironmentOverrides(t *testing.T) {
+	t.Setenv("AUTH_APIKEYS", "billing:k1")
+
+	cfg, err := Load(t.TempDir())
+	require.NoError(t, err)
+
+	assert.Equal(t, "billing:k1", cfg.Auth.APIKeys)
+}
+
+func TestLoadRejectsMalformedFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("grpc: ["), 0o600))
+
+	_, err := Load(dir)
+
+	assert.Error(t, err)
+}
+
+func TestExampleConfigIsValidForServerAndWorker(t *testing.T) {
+	cfg := loadExampleConfig(t)
+
+	assert.NoError(t, cfg.ValidateServer())
+	assert.NoError(t, cfg.ValidateWorker())
 }
