@@ -6,12 +6,18 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
+	"github.com/officiallysidsingh/go-notify/internal/metrics"
 	"github.com/officiallysidsingh/go-notify/internal/notification"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 )
@@ -19,12 +25,16 @@ import (
 const storedNotificationID = int64(7)
 
 type fakeStore struct {
-	insertErr error
-	inserted  int
-	statuses  map[int64]string
+	insertErr     error
+	markQueuedErr error
+	getStatusErr  error
+	inserted      int
+	captured      notification.Message
+	statuses      map[int64]string
 }
 
-func (s *fakeStore) InsertNotification(_ context.Context, _ notification.Message) (int64, error) {
+func (s *fakeStore) InsertNotification(_ context.Context, message notification.Message) (int64, error) {
+	s.captured = message
 	if s.insertErr != nil {
 		return 0, s.insertErr
 	}
@@ -33,12 +43,23 @@ func (s *fakeStore) InsertNotification(_ context.Context, _ notification.Message
 	return storedNotificationID, nil
 }
 
+func (s *fakeStore) MarkQueued(_ context.Context, id int64) error {
+	if s.markQueuedErr != nil {
+		return s.markQueuedErr
+	}
+	s.statuses[id] = notification.StatusQueued
+	return nil
+}
+
 func (s *fakeStore) UpdateNotificationStatus(_ context.Context, id int64, status string) error {
 	s.statuses[id] = status
 	return nil
 }
 
 func (s *fakeStore) GetNotificationStatus(_ context.Context, id int64) (string, error) {
+	if s.getStatusErr != nil {
+		return "", s.getStatusErr
+	}
 	storedStatus, found := s.statuses[id]
 	if !found {
 		return "", repository.ErrNotificationNotFound
@@ -78,15 +99,28 @@ type serverFixture struct {
 	store     *fakeStore
 	publisher *fakePublisher
 	limiter   *fakeLimiter
+	deps      Dependencies
 }
 
-func newServerFixture() *serverFixture {
+func newServerFixture(t *testing.T) *serverFixture {
+	return newServerFixtureWithLogger(t, zaptest.NewLogger(t))
+}
+
+func newServerFixtureWithLogger(t *testing.T, logger *zap.Logger) *serverFixture {
+	t.Helper()
 	fixture := &serverFixture{
 		store:     &fakeStore{statuses: map[int64]string{}},
 		publisher: &fakePublisher{},
 		limiter:   &fakeLimiter{allowed: true},
 	}
-	fixture.server = NewNotificationServer(fixture.publisher, fixture.store, fixture.limiter)
+	fixture.deps = Dependencies{
+		Publisher:   fixture.publisher,
+		Store:       fixture.store,
+		RateLimiter: fixture.limiter,
+		Metrics:     metrics.NewServer(prometheus.NewRegistry()),
+		Logger:      logger,
+	}
+	fixture.server = NewNotificationServer(fixture.deps)
 	return fixture
 }
 
@@ -100,7 +134,7 @@ func pushRequest() *pb.NotificationRequest {
 }
 
 func TestSendNotificationReturnsNotificationID(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 
 	response, err := fixture.server.SendNotification(context.Background(), pushRequest())
 
@@ -110,7 +144,7 @@ func TestSendNotificationReturnsNotificationID(t *testing.T) {
 }
 
 func TestSendNotificationPublishesMessageRoutedByType(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 
 	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
 
@@ -124,7 +158,7 @@ func TestSendNotificationPublishesMessageRoutedByType(t *testing.T) {
 }
 
 func TestSendNotificationRejectsUnsupportedType(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	request := pushRequest()
 	request.Type = "fax"
 
@@ -135,7 +169,7 @@ func TestSendNotificationRejectsUnsupportedType(t *testing.T) {
 }
 
 func TestSendNotificationRejectsMissingUserID(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	request := pushRequest()
 	request.UserId = ""
 
@@ -145,7 +179,7 @@ func TestSendNotificationRejectsMissingUserID(t *testing.T) {
 }
 
 func TestSendNotificationReportsRateLimitAsResourceExhausted(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	fixture.limiter.allowed = false
 
 	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
@@ -155,7 +189,7 @@ func TestSendNotificationReportsRateLimitAsResourceExhausted(t *testing.T) {
 }
 
 func TestSendNotificationHidesStorageErrorDetails(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	fixture.store.insertErr = errors.New("pq: password authentication failed")
 
 	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
@@ -165,7 +199,7 @@ func TestSendNotificationHidesStorageErrorDetails(t *testing.T) {
 }
 
 func TestSendNotificationMarksNotificationFailedWhenPublishFails(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	fixture.publisher.err = errors.New("broker down")
 
 	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
@@ -175,7 +209,7 @@ func TestSendNotificationMarksNotificationFailedWhenPublishFails(t *testing.T) {
 }
 
 func TestGetNotificationStatusReturnsStoredStatus(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	fixture.store.statuses[storedNotificationID] = notification.StatusSent
 
 	response, err := fixture.server.GetNotificationStatus(
@@ -188,7 +222,7 @@ func TestGetNotificationStatusReturnsStoredStatus(t *testing.T) {
 }
 
 func TestGetNotificationStatusReportsMissingNotificationAsNotFound(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 
 	_, err := fixture.server.GetNotificationStatus(
 		context.Background(),
@@ -199,7 +233,7 @@ func TestGetNotificationStatusReportsMissingNotificationAsNotFound(t *testing.T)
 }
 
 func TestSendNotificationRejectsEmailBeforeStoring(t *testing.T) {
-	fixture := newServerFixture()
+	fixture := newServerFixture(t)
 	request := pushRequest()
 	request.Type = notification.TypeEmail
 
@@ -207,4 +241,93 @@ func TestSendNotificationRejectsEmailBeforeStoring(t *testing.T) {
 
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	assert.Zero(t, fixture.store.inserted)
+}
+
+func TestSendNotificationMarksNotificationQueuedAfterPublish(t *testing.T) {
+	fixture := newServerFixture(t)
+
+	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
+
+	require.NoError(t, err)
+	assert.Equal(t, notification.StatusQueued, fixture.store.statuses[storedNotificationID])
+}
+
+func TestSendNotificationSucceedsWhenMarkQueuedFails(t *testing.T) {
+	fixture := newServerFixture(t)
+	fixture.store.markQueuedErr = errors.New("db down")
+
+	response, err := fixture.server.SendNotification(context.Background(), pushRequest())
+
+	require.NoError(t, err)
+	assert.True(t, response.Success)
+	assert.Equal(t, notification.StatusPending, fixture.store.statuses[storedNotificationID])
+}
+
+func TestSendNotificationStoresTitleTypeAndPriority(t *testing.T) {
+	fixture := newServerFixture(t)
+	request := pushRequest()
+	request.Priority = "3"
+
+	_, err := fixture.server.SendNotification(context.Background(), request)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Hello", fixture.store.captured.Title)
+	assert.Equal(t, notification.TypePush, fixture.store.captured.Type)
+	assert.Equal(t, "3", fixture.store.captured.Priority)
+}
+
+func TestSendNotificationFailsClosedWhenRateLimiterIsDown(t *testing.T) {
+	fixture := newServerFixture(t)
+	fixture.limiter.err = errors.New("redis down")
+
+	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
+
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+	assert.NotContains(t, err.Error(), "redis")
+	assert.Zero(t, fixture.store.inserted)
+}
+
+func TestSendNotificationCountsRateLimitedRequests(t *testing.T) {
+	fixture := newServerFixture(t)
+	fixture.limiter.allowed = false
+
+	_, _ = fixture.server.SendNotification(context.Background(), pushRequest())
+
+	assert.Equal(t, 1.0, testutil.ToFloat64(fixture.deps.Metrics.RateLimited))
+	assert.Equal(t, 0.0, testutil.ToFloat64(fixture.deps.Metrics.Received))
+}
+
+func TestGetNotificationStatusRejectsNonPositiveID(t *testing.T) {
+	fixture := newServerFixture(t)
+
+	for _, id := range []int64{0, -1} {
+		_, err := fixture.server.GetNotificationStatus(
+			context.Background(), &pb.StatusRequest{NotificationId: id},
+		)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "id %d", id)
+	}
+}
+
+func TestGetNotificationStatusHidesStorageErrorDetails(t *testing.T) {
+	fixture := newServerFixture(t)
+	fixture.store.getStatusErr = errors.New("pq: password authentication failed")
+
+	_, err := fixture.server.GetNotificationStatus(
+		context.Background(), &pb.StatusRequest{NotificationId: storedNotificationID},
+	)
+
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, err.Error(), "password")
+}
+
+func TestSendNotificationLogsCarryNotificationID(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	fixture := newServerFixtureWithLogger(t, zap.New(core))
+	fixture.publisher.err = errors.New("broker down")
+
+	_, _ = fixture.server.SendNotification(context.Background(), pushRequest())
+
+	entries := logs.FilterField(zap.Int64("notification_id", storedNotificationID)).All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, zap.ErrorLevel, entries[0].Level)
 }
