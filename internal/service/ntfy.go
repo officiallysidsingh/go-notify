@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -103,7 +104,18 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if value == "" {
 		return 0
 	}
-	if seconds, err := strconv.Atoi(value); err == nil {
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	switch {
+	case errors.Is(err, strconv.ErrRange):
+		if strings.HasPrefix(value, "-") {
+			return 0
+		}
+		return maxRetryAfter
+	case err == nil:
+		// Compare before multiplying so large values cannot overflow Duration.
+		if seconds >= int64(maxRetryAfter/time.Second) {
+			return maxRetryAfter
+		}
 		return capRetryAfter(time.Duration(seconds) * time.Second)
 	}
 	if when, err := http.ParseTime(value); err == nil {
