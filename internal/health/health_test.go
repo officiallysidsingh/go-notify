@@ -218,3 +218,24 @@ func TestMonitorLogsRecoveryOnce(t *testing.T) {
 
 	assert.Equal(t, 1, logs.FilterLevelExact(zapcore.InfoLevel).FilterField(zap.String("check", "redis")).Len())
 }
+
+func TestMonitorReportsTimeoutWhenCheckIgnoresContext(t *testing.T) {
+	blocker := make(chan struct{})
+	t.Cleanup(func() { close(blocker) })
+	checks := map[string]Check{
+		"slow": func(context.Context) error { <-blocker; return nil },
+	}
+	logger, observed := observer.New(zap.ErrorLevel)
+	m := NewMonitor(checks, 20*time.Millisecond, zap.New(logger))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx, func(bool) {})
+	assert.Eventually(t, func() bool { return !m.Healthy() && observed.Len() >= 1 }, time.Second, 10*time.Millisecond)
+	assert.Contains(t, serve(m).Body.String(), "slow")
+	cancel()
+}
+
+func TestNewMonitorDefaultsNonPositiveInterval(t *testing.T) {
+	m := NewMonitor(nil, 0, zap.NewNop())
+	assert.Equal(t, time.Second, m.interval)
+}

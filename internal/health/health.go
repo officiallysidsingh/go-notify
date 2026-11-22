@@ -5,6 +5,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -13,6 +14,9 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// errCheckTimedOut marks a check that did not return before the pass deadline.
+var errCheckTimedOut = errors.New("check timed out")
 
 // Check reports whether a dependency is reachable.
 type Check func(ctx context.Context) error
@@ -29,7 +33,13 @@ type Monitor struct {
 	failing   map[string]error
 }
 
+// NewMonitor returns a Monitor that runs the named checks every interval and
+// logs state changes through logger. A non-positive interval defaults to one
+// second.
 func NewMonitor(checks map[string]Check, interval time.Duration, logger *zap.Logger) *Monitor {
+	if interval <= 0 {
+		interval = time.Second
+	}
 	return &Monitor{
 		checks:   checks,
 		interval: interval,
@@ -65,7 +75,9 @@ func (m *Monitor) runOnce(ctx context.Context) {
 	var (
 		wg       sync.WaitGroup
 		resultMu sync.Mutex
+		finished = map[string]bool{}
 		failing  = map[string]error{}
+		closed   bool
 	)
 	for name, check := range m.checks {
 		wg.Add(1)
@@ -73,30 +85,64 @@ func (m *Monitor) runOnce(ctx context.Context) {
 			defer wg.Done()
 			checkCtx, cancel := context.WithTimeout(ctx, m.interval)
 			defer cancel()
-			if err := check(checkCtx); err != nil {
-				resultMu.Lock()
+			err := check(checkCtx)
+			resultMu.Lock()
+			defer resultMu.Unlock()
+			if closed {
+				return // pass already ended; discard late result
+			}
+			finished[name] = true
+			if err != nil {
 				failing[name] = err
-				resultMu.Unlock()
 			}
 		}()
 	}
-	wg.Wait()
 
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	timer := time.NewTimer(m.interval)
+	select {
+	case <-done:
+		timer.Stop()
+	case <-timer.C:
+	}
+
+	resultMu.Lock()
+	closed = true
+	for name := range m.checks {
+		if !finished[name] {
+			failing[name] = errCheckTimedOut
+		}
+	}
+	resultMu.Unlock()
+
+	var newlyFailing map[string]error
+	var recovered []string
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for name, err := range failing {
 		if _, was := m.failing[name]; !was {
-			m.logger.Error("health check failing", zap.String("check", name), zap.Error(err))
+			if newlyFailing == nil {
+				newlyFailing = map[string]error{}
+			}
+			newlyFailing[name] = err
 		}
 	}
 	for name := range m.failing {
 		if _, still := failing[name]; !still {
-			m.logger.Info("health check recovered", zap.String("check", name))
+			recovered = append(recovered, name)
 		}
 	}
 	m.failing = failing
 	m.healthy = len(failing) == 0
 	m.firstDone = true
+	m.mu.Unlock()
+
+	for name, err := range newlyFailing {
+		m.logger.Error("health check failing", zap.String("check", name), zap.Error(err))
+	}
+	for _, name := range recovered {
+		m.logger.Info("health check recovered", zap.String("check", name))
+	}
 }
 
 // Healthy is false until the first pass completes and while any check fails.
