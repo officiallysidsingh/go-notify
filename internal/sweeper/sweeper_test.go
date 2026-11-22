@@ -249,3 +249,42 @@ func TestRunSweepsRepeatedlyUntilCancelled(t *testing.T) {
 		t.Fatal("Run did not return after cancel")
 	}
 }
+
+func TestSweepOnceLogsFailureWhenMaxAttemptsStatusUpdateFails(t *testing.T) {
+	store := newFakeStore(staleRow(7, 4))
+	store.updateErr = errors.New("update boom")
+	pub := &fakePublisher{}
+	core, logs := observer.New(zap.ErrorLevel)
+	m := metrics.NewServer(prometheus.NewRegistry())
+	s := New(store, pub, testConfig(), m, zap.New(core))
+
+	s.SweepOnce(context.Background())
+
+	entries := logs.All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, zap.ErrorLevel, entries[0].Level)
+	assert.Contains(t, entries[0].Message, "failed to mark notification failed")
+	assert.Contains(t, entries[0].ContextMap()["error"], "update boom")
+	assert.Empty(t, pub.published)
+	assert.Equal(t, float64(0), testutil.ToFloat64(m.SweepFailures))
+	assert.Equal(t, float64(0), testutil.ToFloat64(m.SweepRepublished))
+}
+
+func TestSweepOnceLogsWarningWhenMarkQueuedFails(t *testing.T) {
+	store := newFakeStore(staleRow(7, 1))
+	store.markErr = errors.New("mark boom")
+	pub := &fakePublisher{}
+	core, logs := observer.New(zap.WarnLevel)
+	m := metrics.NewServer(prometheus.NewRegistry())
+	s := New(store, pub, testConfig(), m, zap.New(core))
+
+	s.SweepOnce(context.Background())
+
+	entries := logs.All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, zap.WarnLevel, entries[0].Level)
+	assert.Equal(t, int64(7), entries[0].ContextMap()["notification_id"])
+	require.Len(t, pub.published, 1)
+	assert.Equal(t, float64(1), testutil.ToFloat64(m.SweepRepublished))
+	assert.Equal(t, float64(0), testutil.ToFloat64(m.SweepFailures))
+}
