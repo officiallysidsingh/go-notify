@@ -32,15 +32,15 @@ proto:
 
 # Build Docker images
 docker-build:
-	docker-compose -f ./deployments/docker-compose.yaml build
+	docker compose -f ./deployments/docker-compose.yaml build
 
 # Start Docker containers
 docker-up:
-	docker-compose -f ./deployments/docker-compose.yaml up --build -d && make migrate-up
+	docker compose -f ./deployments/docker-compose.yaml up --build -d --wait
 
 # Stop Docker containers
 docker-down:
-	docker-compose -f ./deployments/docker-compose.yaml down -v
+	docker compose -f ./deployments/docker-compose.yaml down -v
 
 # Restart RabbitMQ
 restart-rabbitmq:
