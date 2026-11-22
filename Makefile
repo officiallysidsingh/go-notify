@@ -1,4 +1,4 @@
-.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test test-services-up test-services-down test-integration docker-build lint
+.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test test-services-up test-services-down test-integration coverage docker-build lint
 
 # Variables
 DB_URL := "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
@@ -58,6 +58,12 @@ test-services-down:
 
 test-integration: test-services-up
 	go test -race -tags=integration -count=1 ./internal/integration/...
+
+COVER_PKGS := ./config/...,./internal/...
+
+coverage: test-services-up
+	go test -race -tags=integration -count=1 -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out ./...
+	./scripts/check-coverage.sh coverage.out
 
 # Database migrations
 migrate-up:

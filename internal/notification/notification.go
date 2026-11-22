@@ -1,5 +1,7 @@
 package notification
 
+import "encoding/json"
+
 const (
 	TypeEmail = "email"
 	TypeSMS   = "sms"
@@ -21,6 +23,14 @@ type Message struct {
 	Priority       string `json:"priority"`
 	Message        string `json:"message"`
 	Type           string `json:"type"`
+}
+
+// JSON returns the wire encoding of the message. Message holds only strings
+// and an integer, which encoding/json always marshals, so there is no error to
+// report.
+func (m Message) JSON() []byte {
+	body, _ := json.Marshal(m)
+	return body
 }
 
 func Types() []string {

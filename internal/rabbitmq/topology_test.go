@@ -64,3 +64,35 @@ func TestDeclareTopologyStopsAtFirstFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestDeclareTopologyStopsAtLaterFailures(t *testing.T) {
+	cause := errors.New("boom")
+	failOn := func(n int) func(int) error {
+		return func(call int) error {
+			if call == n {
+				return cause
+			}
+			return nil
+		}
+	}
+	tests := []struct {
+		name    string
+		script  func(*rabbitmqtest.Channel)
+		wantOps int
+	}{
+		{"notification exchange", func(c *rabbitmqtest.Channel) { c.ExchangeDeclareErr = failOn(2) }, 3},
+		{"broadcast exchange", func(c *rabbitmqtest.Channel) { c.ExchangeDeclareErr = failOn(3) }, 4},
+		{"notification queue", func(c *rabbitmqtest.Channel) { c.QueueDeclareErr = failOn(2) }, 5},
+		{"notification bind", func(c *rabbitmqtest.Channel) { c.QueueBindErr = failOn(2) }, 6},
+		{"broadcast bind", func(c *rabbitmqtest.Channel) { c.QueueBindErr = failOn(3) }, 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := rabbitmqtest.NewChannel()
+			tt.script(ch)
+			err := rabbitmq.DeclareTopology(ch)
+			require.ErrorIs(t, err, cause)
+			require.Equal(t, tt.wantOps, ch.TotalOps())
+		})
+	}
+}

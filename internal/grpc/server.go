@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -126,10 +125,7 @@ func (s *NotificationServer) publish(
 	notificationID int64,
 	req *pb.NotificationRequest,
 ) error {
-	body, err := json.Marshal(messageFor(notificationID, req))
-	if err != nil {
-		return err
-	}
+	body := messageFor(notificationID, req).JSON()
 	return s.deps.Publisher.Publish(ctx, rabbitmq.NotificationExchange, req.Type, body)
 }
 

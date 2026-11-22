@@ -3,7 +3,6 @@ package sweeper
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"go.uber.org/zap"
@@ -85,12 +84,7 @@ func (s *Sweeper) giveUp(ctx context.Context, row repository.StaleNotification) 
 
 func (s *Sweeper) republish(ctx context.Context, row repository.StaleNotification) {
 	id := zap.Int64("notification_id", row.NotificationID)
-	body, err := json.Marshal(row.Message)
-	if err != nil {
-		s.logger.Warn("failed to marshal notification", id, zap.Error(err))
-		s.metrics.SweepFailures.Inc()
-		return
-	}
+	body := row.Message.JSON()
 	if err := s.publisher.Publish(ctx, rabbitmq.NotificationExchange, row.Type, body); err != nil {
 		s.logger.Warn("failed to republish notification", id, zap.Error(err))
 		s.metrics.SweepFailures.Inc()

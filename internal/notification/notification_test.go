@@ -32,3 +32,14 @@ func TestIsSupportedTypeAcceptsOnlyPush(t *testing.T) {
 		}
 	}
 }
+
+func TestMessageJSONUsesWireFieldNames(t *testing.T) {
+	msg := Message{
+		NotificationID: 7, UserID: "u", Title: "T", Priority: "3", Message: "hi", Type: TypePush,
+	}
+
+	want := `{"notification_id":7,"user_id":"u","title":"T","priority":"3","message":"hi","type":"push"}`
+	if got := string(msg.JSON()); got != want {
+		t.Errorf("JSON() = %s, want %s", got, want)
+	}
+}
