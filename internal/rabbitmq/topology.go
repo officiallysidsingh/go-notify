@@ -24,7 +24,7 @@ func QueueForType(notificationType string) string {
 	return "queue_" + notificationType
 }
 
-func DeclareTopology(ch *amqp.Channel) error {
+func DeclareTopology(ch Channel) error {
 	if err := declareDeadLettering(ch); err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func DeclareTopology(ch *amqp.Channel) error {
 	return nil
 }
 
-func declareDeadLettering(ch *amqp.Channel) error {
+func declareDeadLettering(ch Channel) error {
 	if err := declareDurableExchange(ch, DeadLetterExchange, amqp.ExchangeDirect); err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func declareDeadLettering(ch *amqp.Channel) error {
 	return bindQueue(ch, DeadLetterQueue, deadLetterRoutingKey, DeadLetterExchange)
 }
 
-func declareNotificationQueue(ch *amqp.Channel, notificationType string) error {
+func declareNotificationQueue(ch Channel, notificationType string) error {
 	queue := QueueForType(notificationType)
 	deadLetterToExchange := amqp.Table{
 		"x-dead-letter-exchange":    DeadLetterExchange,
@@ -67,7 +67,7 @@ func declareNotificationQueue(ch *amqp.Channel, notificationType string) error {
 	return bindQueue(ch, queue, matchAllRoutingKey, BroadcastExchange)
 }
 
-func declareDurableExchange(ch *amqp.Channel, name, kind string) error {
+func declareDurableExchange(ch Channel, name, kind string) error {
 	const durable, autoDelete, internal, noWait = true, false, false, false
 	if err := ch.ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, nil); err != nil {
 		return fmt.Errorf("failed to declare exchange %s: %w", name, err)
@@ -75,7 +75,7 @@ func declareDurableExchange(ch *amqp.Channel, name, kind string) error {
 	return nil
 }
 
-func declareDurableQueue(ch *amqp.Channel, name string, args amqp.Table) error {
+func declareDurableQueue(ch Channel, name string, args amqp.Table) error {
 	const durable, autoDelete, exclusive, noWait = true, false, false, false
 	if _, err := ch.QueueDeclare(name, durable, autoDelete, exclusive, noWait, args); err != nil {
 		return fmt.Errorf("failed to declare queue %s: %w", name, err)
@@ -83,7 +83,7 @@ func declareDurableQueue(ch *amqp.Channel, name string, args amqp.Table) error {
 	return nil
 }
 
-func bindQueue(ch *amqp.Channel, queue, routingKey, exchange string) error {
+func bindQueue(ch Channel, queue, routingKey, exchange string) error {
 	const noWait = false
 	if err := ch.QueueBind(queue, routingKey, exchange, noWait, nil); err != nil {
 		return fmt.Errorf("failed to bind queue %s to %s: %w", queue, exchange, err)
