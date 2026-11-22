@@ -214,3 +214,21 @@ func TestParseRetryAfterCapsOversizedIntegers(t *testing.T) {
 	// Out-of-range for int64 (strconv.ErrRange)
 	assert.Equal(t, time.Minute, parseRetryAfter("99999999999999999999999", time.Now()))
 }
+
+func TestSendReportsRequestBuildFailure(t *testing.T) {
+	var nilCtx context.Context
+
+	err := senderFor("http://127.0.0.1").Send(nilCtx, notification.Message{})
+
+	assert.ErrorContains(t, err, "failed to build ntfy request")
+}
+
+func TestSendSetsPriorityHeader(t *testing.T) {
+	headers := captureHeaders(t, config.NtfyConfig{Topic: testTopic}, notification.Message{Priority: "4"})
+
+	assert.Equal(t, "4", headers.Get("X-Priority"))
+}
+
+func TestParseRetryAfterReturnsZeroForHugeNegativeSeconds(t *testing.T) {
+	assert.Zero(t, parseRetryAfter("-99999999999999999999", time.Now()))
+}

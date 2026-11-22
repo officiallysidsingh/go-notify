@@ -79,3 +79,13 @@ func TestPingReportsUnreachableRedis(t *testing.T) {
 	server.Close()
 	require.Error(t, limiter.Ping(context.Background()))
 }
+
+func TestAllowReportsUnreachableRedis(t *testing.T) {
+	limiter, server := newTestLimiter(t)
+	server.Close()
+
+	allowed, err := limiter.Allow(context.Background(), "user-1")
+
+	assert.False(t, allowed)
+	assert.ErrorContains(t, err, `failed to count request for "user-1"`)
+}

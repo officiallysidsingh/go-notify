@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/officiallysidsingh/go-notify/internal/metrics"
 	"github.com/officiallysidsingh/go-notify/internal/notification"
@@ -304,4 +305,104 @@ func TestRunProcessesMessagesAfterJobTimeoutHasElapsed(t *testing.T) {
 	session.enqueue(t, notification.TypePush, second, testNotificationID+1)
 
 	assert.Eventually(t, second.acked, waitFor, tick)
+}
+
+func TestNewConsumerAppliesDefaults(t *testing.T) {
+	c := NewConsumer(Options{}, nil, nil, zap.NewNop())
+
+	assert.Equal(t, defaultReconnectDelay, c.opts.ReconnectDelay)
+	assert.Equal(t, 1, c.opts.Workers)
+	assert.Equal(t, defaultJobTimeout, c.opts.JobTimeout)
+	assert.NotNil(t, c.opts.Dial)
+}
+
+func TestRunWarnsWhenCancellingSubscriptionFails(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	session := newBrokerSession()
+	session.channel.CancelErr = func(int) error { return errors.New("cancel failed") }
+	fixture := newConsumerFixture(rabbitmqtest.NewDialer(session.conn))
+	fixture.consumer.logger = zap.New(core)
+	fixture.start(t)
+	fixture.waitConnected(t)
+
+	fixture.stop(t)
+
+	assert.Equal(t, len(notification.Types()), logs.FilterMessage("failed to cancel consumer").Len())
+}
+
+func TestRunWarnsWhenClosingConnectionFails(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	session := newBrokerSession()
+	session.conn.CloseErr = errors.New("close failed")
+	fixture := newConsumerFixture(rabbitmqtest.NewDialer(session.conn))
+	fixture.consumer.logger = zap.New(core)
+	fixture.start(t)
+	fixture.waitConnected(t)
+
+	fixture.stop(t)
+
+	assert.Equal(t, 1, logs.FilterMessage("failed to close consumer connection").Len())
+}
+
+func TestRunIgnoresAlreadyClosedConnectionOnShutdown(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	session := newBrokerSession()
+	session.conn.CloseErr = amqp.ErrClosed
+	fixture := newConsumerFixture(rabbitmqtest.NewDialer(session.conn))
+	fixture.consumer.logger = zap.New(core)
+	fixture.start(t)
+	fixture.waitConnected(t)
+
+	fixture.stop(t)
+
+	assert.Equal(t, 1, session.conn.CloseCalls)
+	assert.Zero(t, logs.Len())
+}
+
+func TestWorkerPoolStopsForwardingWhenStreamCloses(t *testing.T) {
+	fixture := newConsumerFixture(rabbitmqtest.NewDialer(newBrokerSession().conn))
+	stream := make(chan amqp.Delivery)
+	close(stream)
+
+	pool := fixture.consumer.startWorkers([]<-chan amqp.Delivery{stream})
+
+	forwarded := make(chan struct{})
+	go func() {
+		pool.forwarders.Wait()
+		close(forwarded)
+	}()
+	select {
+	case <-forwarded:
+	case <-time.After(waitFor):
+		t.Fatal("forwarder kept running after its stream closed")
+	}
+	pool.shutdown(false)
+}
+
+func TestForwarderStopsWhileWaitingForFreeWorker(t *testing.T) {
+	pool := &workerPool{merged: make(chan amqp.Delivery), stop: make(chan struct{})}
+	stream := make(chan amqp.Delivery, 1)
+	stream <- amqp.Delivery{Body: []byte("held")}
+	pool.forwarders.Add(1)
+	go pool.forward(stream)
+	// Once the forwarder has taken the delivery it is blocked handing it over.
+	require.Eventually(t, func() bool { return len(stream) == 0 }, waitFor, tick)
+
+	close(pool.stop)
+
+	forwarded := make(chan struct{})
+	go func() {
+		pool.forwarders.Wait()
+		close(forwarded)
+	}()
+	select {
+	case <-forwarded:
+	case <-time.After(waitFor):
+		t.Fatal("forwarder kept waiting for a worker after stop")
+	}
+	select {
+	case delivery := <-pool.merged:
+		t.Fatalf("unexpected delivery forwarded: %s", delivery.Body)
+	default:
+	}
 }

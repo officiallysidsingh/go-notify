@@ -27,6 +27,7 @@ const storedNotificationID = int64(7)
 type fakeStore struct {
 	insertErr     error
 	markQueuedErr error
+	updateErr     error
 	getStatusErr  error
 	inserted      int
 	captured      notification.Message
@@ -52,6 +53,9 @@ func (s *fakeStore) MarkQueued(_ context.Context, id int64) error {
 }
 
 func (s *fakeStore) UpdateNotificationStatus(_ context.Context, id int64, status string) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
 	s.statuses[id] = status
 	return nil
 }
@@ -330,4 +334,18 @@ func TestSendNotificationLogsCarryNotificationID(t *testing.T) {
 	entries := logs.FilterField(zap.Int64("notification_id", storedNotificationID)).All()
 	require.Len(t, entries, 1)
 	assert.Equal(t, zap.ErrorLevel, entries[0].Level)
+}
+
+func TestSendNotificationLogsWhenMarkingFailedAlsoFails(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	fixture := newServerFixtureWithLogger(t, zap.New(core))
+	fixture.publisher.err = errors.New("broker down")
+	fixture.store.updateErr = errors.New("database down")
+
+	_, err := fixture.server.SendNotification(context.Background(), pushRequest())
+
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+	entries := logs.FilterMessage("failed to mark notification failed").All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, int64(storedNotificationID), entries[0].ContextMap()["notification_id"])
 }

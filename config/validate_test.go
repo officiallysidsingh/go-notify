@@ -78,3 +78,10 @@ func TestValidateWorkerRejectsNonHTTPNtfyURL(t *testing.T) {
 
 	assert.ErrorContains(t, cfg.ValidateWorker(), "ntfy.baseURL")
 }
+
+func TestValidateServerRejectsUnparseableURL(t *testing.T) {
+	cfg := validServer()
+	cfg.RabbitMQ.URL = "://bad"
+
+	assert.ErrorContains(t, cfg.ValidateServer(), "rabbitmq.url: is not a valid URL")
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/streadway/amqp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq/rabbitmqtest"
 )
@@ -191,4 +192,170 @@ func TestCloseIsSafeToCallTwice(t *testing.T) {
 		p.Close()
 		p.Close()
 	})
+}
+
+func observedLogger() (*zap.Logger, *observer.ObservedLogs) {
+	core, logs := observer.New(zap.ErrorLevel)
+	return zap.New(core), logs
+}
+
+func TestNewProducerToleratesNilLogger(t *testing.T) {
+	conn := confirmingConn(true, nil)
+	d := rabbitmqtest.NewDialer(conn)
+	p, err := newProducer("u", d.Dialer(), nil, testDelay, testDelay, testConfirm)
+	require.NoError(t, err)
+
+	require.NotNil(t, p.logger)
+	require.NoError(t, p.Publish(context.Background(), "ex", "k", []byte("x")))
+}
+
+func TestPingReturnsContextError(t *testing.T) {
+	d := rabbitmqtest.NewDialer(rabbitmqtest.NewConnection())
+	p := build(t, d)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, p.Ping(ctx), context.Canceled)
+	require.Equal(t, 1, d.DialCount())
+}
+
+func TestPublishReturnsContextErrorBeforeSending(t *testing.T) {
+	conn := confirmingConn(true, nil)
+	p := build(t, rabbitmqtest.NewDialer(conn))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := p.Publish(ctx, "ex", "k", []byte("x"))
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, conn.Channels[0].Published)
+}
+
+func TestPublishReportsFailedReconnect(t *testing.T) {
+	boom := errors.New("refused")
+	conn := rabbitmqtest.NewConnection()
+	d := rabbitmqtest.NewScriptedDialer(
+		rabbitmqtest.DialResult{Conn: conn},
+		rabbitmqtest.DialResult{Err: boom},
+	)
+	p := build(t, d)
+	conn.IsClosedValue = true
+
+	err := p.Publish(context.Background(), "ex", "k", []byte("x"))
+
+	require.ErrorIs(t, err, boom)
+	require.Equal(t, 1+publishAttempts, d.DialCount())
+}
+
+func TestPublishStopsWaitingForConfirmWhenContextIsCancelled(t *testing.T) {
+	silent := rabbitmqtest.NewConnection() // never confirms
+	d := rabbitmqtest.NewDialer(silent)
+	p, err := newProducer("u", d.Dialer(), zap.NewNop(), testDelay, time.Hour, time.Hour)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(testConfirm, cancel)
+
+	err = p.Publish(ctx, "ex", "k", []byte("x"))
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestNewProducerClosesConnectionWhenSetupFails(t *testing.T) {
+	cause := errors.New("setup failed")
+	tests := []struct {
+		name    string
+		channel func(call int) (*rabbitmqtest.Channel, error)
+		want    string
+	}{
+		{"open channel", func(int) (*rabbitmqtest.Channel, error) { return nil, cause }, "open a channel"},
+		{"declare topology", func(int) (*rabbitmqtest.Channel, error) {
+			ch := rabbitmqtest.NewChannel()
+			ch.ExchangeDeclareErr = func(int) error { return cause }
+			return ch, nil
+		}, "declare exchange"},
+		{"enable confirms", func(int) (*rabbitmqtest.Channel, error) {
+			ch := rabbitmqtest.NewChannel()
+			ch.ConfirmErr = func(int) error { return cause }
+			return ch, nil
+		}, "publisher confirms"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := rabbitmqtest.NewConnection()
+			conn.ChannelFunc = tt.channel
+			d := rabbitmqtest.NewDialer(conn)
+
+			p, err := newProducer("u", d.Dialer(), zap.NewNop(), testDelay, testDelay, testConfirm)
+
+			require.Nil(t, p)
+			require.ErrorIs(t, err, cause)
+			require.ErrorContains(t, err, tt.want)
+			require.Equal(t, startupConnectAttempts, conn.CloseCalls)
+			for _, ch := range conn.Channels {
+				require.True(t, ch.Closed)
+			}
+		})
+	}
+}
+
+func TestCloseLogsConnectionCloseFailure(t *testing.T) {
+	logger, logs := observedLogger()
+	conn := rabbitmqtest.NewConnection()
+	conn.CloseErr = errors.New("close failed")
+	d := rabbitmqtest.NewDialer(conn)
+	p, err := newProducer("u", d.Dialer(), logger, testDelay, testDelay, testConfirm)
+	require.NoError(t, err)
+
+	p.Close()
+
+	require.Equal(t, 1, logs.FilterMessage("error closing producer connection").Len())
+}
+
+func TestCloseIgnoresAlreadyClosedConnection(t *testing.T) {
+	logger, logs := observedLogger()
+	conn := rabbitmqtest.NewConnection()
+	conn.CloseErr = amqp.ErrClosed
+	d := rabbitmqtest.NewDialer(conn)
+	p, err := newProducer("u", d.Dialer(), logger, testDelay, testDelay, testConfirm)
+	require.NoError(t, err)
+
+	p.Close()
+
+	require.Equal(t, 1, conn.CloseCalls)
+	require.Zero(t, logs.Len())
+}
+
+func TestSetupFailureLogsChannelCloseFailure(t *testing.T) {
+	logger, logs := observedLogger()
+	cause := errors.New("setup failed")
+	conn := rabbitmqtest.NewConnection()
+	conn.ChannelFunc = func(int) (*rabbitmqtest.Channel, error) {
+		ch := rabbitmqtest.NewChannel()
+		ch.ConfirmErr = func(int) error { return cause }
+		ch.CloseErr = func(int) error { return errors.New("close failed") }
+		return ch, nil
+	}
+	d := rabbitmqtest.NewDialer(conn)
+
+	_, err := newProducer("u", d.Dialer(), logger, testDelay, testDelay, testConfirm)
+
+	require.ErrorIs(t, err, cause)
+	require.Equal(t, startupConnectAttempts, logs.FilterMessage("error closing producer channel").Len())
+}
+
+func TestSetupFailureIgnoresAlreadyClosedChannel(t *testing.T) {
+	logger, logs := observedLogger()
+	conn := rabbitmqtest.NewConnection()
+	conn.ChannelFunc = func(int) (*rabbitmqtest.Channel, error) {
+		ch := rabbitmqtest.NewChannel()
+		ch.ConfirmErr = func(int) error { return errors.New("setup failed") }
+		ch.CloseErr = func(int) error { return amqp.ErrClosed }
+		return ch, nil
+	}
+	d := rabbitmqtest.NewDialer(conn)
+
+	_, err := newProducer("u", d.Dialer(), logger, testDelay, testDelay, testConfirm)
+
+	require.Error(t, err)
+	require.Zero(t, logs.Len())
 }

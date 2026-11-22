@@ -32,6 +32,7 @@ const (
 type fakeAcknowledger struct {
 	mu       sync.Mutex
 	ackErr   error
+	nackErr  error
 	acks     int
 	nacks    int
 	requeued bool
@@ -49,7 +50,7 @@ func (a *fakeAcknowledger) Nack(_ uint64, _ bool, requeue bool) error {
 	defer a.mu.Unlock()
 	a.nacks++
 	a.requeued = requeue
-	return nil
+	return a.nackErr
 }
 
 func (a *fakeAcknowledger) Reject(uint64, bool) error { return nil }
@@ -432,4 +433,17 @@ func TestProcessLeavesNotificationUnsettledWhenSessionAborts(t *testing.T) {
 
 	assert.False(t, fixture.acknowledger.settled())
 	assert.Empty(t, fixture.store.statusOf(testNotificationID))
+}
+
+func TestProcessLogsDeadLetterFailure(t *testing.T) {
+	fixture := newProcessorFixture(0)
+	fixture.sender.failures = testMaxAttempts
+	fixture.acknowledger.nackErr = errors.New("channel closed")
+
+	assert.NotPanics(t, func() {
+		fixture.processor.Process(context.Background(), fixture.deliveryOfType(t, notification.TypePush))
+	})
+
+	assert.Equal(t, 1, fixture.logs.FilterMessage("failed to dead-letter message").Len())
+	assert.Equal(t, 1.0, testutil.ToFloat64(fixture.metrics.DeadLettered))
 }

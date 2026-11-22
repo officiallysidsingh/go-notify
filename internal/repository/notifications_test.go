@@ -196,3 +196,40 @@ func TestClaimStalePendingWrapsDriverError(t *testing.T) {
 	assert.Contains(t, err.Error(), "claim stale pending")
 	assert.ErrorIs(t, err, errBoom)
 }
+
+func TestUpdateNotificationStatusWrapsRowsAffectedError(t *testing.T) {
+	db, mock := newMockedDB(t)
+	mock.ExpectExec("UPDATE notifications").WillReturnResult(sqlmock.NewErrorResult(errBoom))
+
+	err := db.UpdateNotificationStatus(context.Background(), 42, "sent")
+
+	assert.ErrorContains(t, err, "rows affected")
+	assert.ErrorIs(t, err, errBoom)
+}
+
+func TestClaimStalePendingWrapsScanError(t *testing.T) {
+	db, mock := newMockedDB(t)
+	mock.ExpectQuery("UPDATE notifications").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"id", "user_id", "title", "priority", "message", "type", "sweep_attempts"},
+		).AddRow("not-a-number", "user-1", "T", "3", "hello", "push", 2))
+
+	claimed, err := db.ClaimStalePending(context.Background(), time.Minute, 10)
+
+	assert.Nil(t, claimed)
+	assert.ErrorContains(t, err, "scan stale pending")
+}
+
+func TestClaimStalePendingWrapsRowIterationError(t *testing.T) {
+	db, mock := newMockedDB(t)
+	mock.ExpectQuery("UPDATE notifications").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"id", "user_id", "title", "priority", "message", "type", "sweep_attempts"},
+		).AddRow(7, "user-1", "T", "3", "hello", "push", 2).RowError(0, errBoom))
+
+	claimed, err := db.ClaimStalePending(context.Background(), time.Minute, 10)
+
+	assert.Nil(t, claimed)
+	assert.ErrorContains(t, err, "read stale pending")
+	assert.ErrorIs(t, err, errBoom)
+}
