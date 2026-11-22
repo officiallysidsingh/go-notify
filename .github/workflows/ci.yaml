@@ -177,7 +177,7 @@ jobs:
       - name: Build server image
         run: |
           for attempt in 1 2 3; do
-            if docker buildx build -f deployments/docker/Dockerfile.grpc --platform linux/amd64 --tag go-notify-server:ci .; then
+            if docker buildx build -f deployments/docker/Dockerfile.grpc --platform linux/amd64 --load --tag go-notify-server:ci .; then
               exit 0
             fi
             echo "server build attempt $attempt failed; retrying in 15s" >&2
@@ -187,7 +187,7 @@ jobs:
       - name: Build worker image
         run: |
           for attempt in 1 2 3; do
-            if docker buildx build -f deployments/docker/Dockerfile.worker --platform linux/amd64 --tag go-notify-worker:ci .; then
+            if docker buildx build -f deployments/docker/Dockerfile.worker --platform linux/amd64 --load --tag go-notify-worker:ci .; then
               exit 0
             fi
             echo "worker build attempt $attempt failed; retrying in 15s" >&2
