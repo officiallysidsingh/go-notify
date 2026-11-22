@@ -1,0 +1,54 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - errorlint
+    - gocritic
+    - revive
+    - misspell
+    - bodyclose
+    - noctx
+    - contextcheck
+    - gocyclo
+    - funlen
+    - forbidigo
+
+linters-settings:
+  gocyclo:
+    min-complexity: 10
+  funlen:
+    lines: 40
+    statements: 30
+  forbidigo:
+    forbid:
+      - p: '^log\.'
+        msg: "use the injected *zap.Logger instead of the stdlib log package"
+      - p: '^fmt\.Print'
+        msg: "use the injected *zap.Logger instead of fmt.Print*"
+      - p: '^println$'
+        msg: "use the injected *zap.Logger instead of println"
+  revive:
+    rules:
+      - name: var-naming
+      - name: package-comments
+      - name: exported
+
+issues:
+  exclude-dirs:
+    - api/generated
+    - internal/integration
+    - internal/rabbitmq/rabbitmqtest
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - funlen
+        - gocyclo
+        - forbidigo   # tests may use fmt/log

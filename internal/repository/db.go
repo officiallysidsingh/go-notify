@@ -17,17 +17,18 @@ type DB struct {
 }
 
 // Creates a new database connection
-func NewDB(cfg config.PostgresConfig) (*DB, error) {
-	return newDB(cfg, sqlx.Open)
+func NewDB(ctx context.Context, cfg config.PostgresConfig) (*DB, error) {
+	return newDB(ctx, cfg, sqlx.Open)
 }
 
 // newDB takes the open function as a seam so tests can inject failures.
 func newDB(
+	parent context.Context,
 	cfg config.PostgresConfig,
 	open func(driver, dsn string) (*sqlx.DB, error),
 ) (*DB, error) {
 	// Create a context with timeout for establishing the connection.
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnTimeout)
+	ctx, cancel := context.WithTimeout(parent, cfg.ConnTimeout)
 	defer cancel()
 
 	// Open a database connection using sqlx.

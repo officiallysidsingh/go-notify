@@ -1,4 +1,4 @@
-.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test test-services-up test-services-down test-integration coverage docker-build lint
+.PHONY: build run worker proto migrate-up migrate-down docker-up docker-down clean restart-rabbitmq test test-services-up test-services-down test-integration coverage docker-build lint tidy-check
 
 # Variables
 DB_URL := "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable"
@@ -78,4 +78,11 @@ clean:
 
 # Lint
 lint:
+	gofmt -l . | tee /dev/stderr | if [ -s /dev/stdin ]; then false; else true; fi
+	go vet ./...
 	golangci-lint run
+
+# Fail when go.mod or go.sum are not tidy
+tidy-check:
+	go mod tidy
+	git diff --exit-code go.mod go.sum

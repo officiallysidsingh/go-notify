@@ -49,7 +49,7 @@ func TestPingSucceedsWhenDatabaseIsReachable(t *testing.T) {
 func TestNewDBReportsOpenFailure(t *testing.T) {
 	open := func(string, string) (*sqlx.DB, error) { return nil, errors.New("bad dsn") }
 
-	_, err := newDB(config.PostgresConfig{}, open)
+	_, err := newDB(context.Background(), config.PostgresConfig{}, open)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open")
@@ -63,7 +63,7 @@ func TestNewDBReportsPingFailure(t *testing.T) {
 	mock.ExpectClose()
 	open := func(string, string) (*sqlx.DB, error) { return sqlx.NewDb(mockDB, "sqlmock"), nil }
 
-	_, err = newDB(config.PostgresConfig{ConnTimeout: 1e9}, open)
+	_, err = newDB(context.Background(), config.PostgresConfig{ConnTimeout: 1e9}, open)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ping")
@@ -78,7 +78,7 @@ func TestNewDBConfiguresPoolOnSuccess(t *testing.T) {
 	mock.ExpectPing()
 	open := func(string, string) (*sqlx.DB, error) { return sqlx.NewDb(mockDB, "sqlmock"), nil }
 
-	db, err := newDB(config.PostgresConfig{ConnTimeout: 1e9, MaxOpenConns: 7}, open)
+	db, err := newDB(context.Background(), config.PostgresConfig{ConnTimeout: 1e9, MaxOpenConns: 7}, open)
 
 	require.NoError(t, err)
 	assert.Equal(t, 7, db.conn.Stats().MaxOpenConnections)

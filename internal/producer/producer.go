@@ -164,7 +164,7 @@ func (p *RabbitMQProducer) Publish(
 			break
 		}
 		if !waitOrDone(ctx, p.publishRetryDelay) {
-			err = fmt.Errorf("%w (last error: %v)", ctx.Err(), err)
+			err = fmt.Errorf("%w (last error: %w)", ctx.Err(), err)
 			break
 		}
 	}

@@ -364,7 +364,7 @@ func TestWorkerPoolStopsForwardingWhenStreamCloses(t *testing.T) {
 	stream := make(chan amqp.Delivery)
 	close(stream)
 
-	pool := fixture.consumer.startWorkers([]<-chan amqp.Delivery{stream})
+	pool := fixture.consumer.startWorkers(context.Background(), []<-chan amqp.Delivery{stream})
 
 	forwarded := make(chan struct{})
 	go func() {
@@ -405,4 +405,13 @@ func TestForwarderStopsWhileWaitingForFreeWorker(t *testing.T) {
 		t.Fatalf("unexpected delivery forwarded: %s", delivery.Body)
 	default:
 	}
+}
+
+func TestLostCause(t *testing.T) {
+	assert.ErrorIs(t, lostCause(nil), errConnectionClosed)
+
+	cause := lostCause(&amqp.Error{Code: amqp.ConnectionForced, Reason: "shutdown"})
+	var amqpErr amqp.Error
+	require.ErrorAs(t, cause, &amqpErr)
+	assert.Equal(t, "shutdown", amqpErr.Reason)
 }
