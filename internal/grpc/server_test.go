@@ -143,7 +143,7 @@ func TestSendNotificationReturnsNotificationID(t *testing.T) {
 	response, err := fixture.server.SendNotification(context.Background(), pushRequest())
 
 	require.NoError(t, err)
-	assert.True(t, response.Success)
+	assert.True(t, response.Success) //nolint:staticcheck // deprecated field kept populated
 	assert.Equal(t, storedNotificationID, response.NotificationId)
 }
 
@@ -263,7 +263,7 @@ func TestSendNotificationSucceedsWhenMarkQueuedFails(t *testing.T) {
 	response, err := fixture.server.SendNotification(context.Background(), pushRequest())
 
 	require.NoError(t, err)
-	assert.True(t, response.Success)
+	assert.True(t, response.Success) //nolint:staticcheck // deprecated field kept populated
 	assert.Equal(t, notification.StatusPending, fixture.store.statuses[storedNotificationID])
 }
 
