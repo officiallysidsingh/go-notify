@@ -8,6 +8,7 @@ const (
 
 const (
 	StatusPending = "pending"
+	StatusQueued  = "queued"
 	StatusSent    = "sent"
 	StatusFailed  = "failed"
 )
@@ -33,4 +34,9 @@ func IsSupportedType(notificationType string) bool {
 		}
 	}
 	return false
+}
+
+// IsSettled reports whether a status is final: the notification was sent or failed.
+func IsSettled(status string) bool {
+	return status == StatusSent || status == StatusFailed
 }

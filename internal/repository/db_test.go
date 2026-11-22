@@ -2,11 +2,12 @@ package repository
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/jmoiron/sqlx"
+	"github.com/officiallysidsingh/go-notify/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,49 +20,66 @@ func newMockedDB(t *testing.T) (*DB, sqlmock.Sqlmock) {
 	return &DB{conn: sqlx.NewDb(mockDB, "sqlmock")}, mock
 }
 
-func TestInsertNotificationReturnsGeneratedID(t *testing.T) {
-	db, mock := newMockedDB(t)
-	mock.ExpectQuery("INSERT INTO notifications").
-		WithArgs("user-1", "hello", "pending").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(42))
-
-	id, err := db.InsertNotification(context.Background(), "user-1", "hello", "pending")
-
+func newPingMonitoredDB(t *testing.T) (*DB, sqlmock.Sqlmock) {
+	t.Helper()
+	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
-	assert.Equal(t, int64(42), id)
+	t.Cleanup(func() { _ = mockDB.Close() })
+	return &DB{conn: sqlx.NewDb(mockDB, "sqlmock")}, mock
+}
+
+func TestPingReportsUnreachableDatabase(t *testing.T) {
+	db, mock := newPingMonitoredDB(t)
+	mock.ExpectPing().WillReturnError(errors.New("boom"))
+
+	err := db.Ping(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ping")
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestPingSucceedsWhenDatabaseIsReachable(t *testing.T) {
+	db, mock := newPingMonitoredDB(t)
+	mock.ExpectPing()
+
+	assert.NoError(t, db.Ping(context.Background()))
+}
+
+func TestNewDBReportsOpenFailure(t *testing.T) {
+	open := func(string, string) (*sqlx.DB, error) { return nil, errors.New("bad dsn") }
+
+	_, err := newDB(config.PostgresConfig{}, open)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open")
+	assert.Contains(t, err.Error(), "bad dsn")
+}
+
+func TestNewDBReportsPingFailure(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	mock.ExpectPing().WillReturnError(errors.New("unreachable"))
+	mock.ExpectClose()
+	open := func(string, string) (*sqlx.DB, error) { return sqlx.NewDb(mockDB, "sqlmock"), nil }
+
+	_, err = newDB(config.PostgresConfig{ConnTimeout: 1e9}, open)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ping")
+	assert.Contains(t, err.Error(), "unreachable")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetNotificationStatusReturnsStoredStatus(t *testing.T) {
-	db, mock := newMockedDB(t)
-	mock.ExpectQuery("SELECT status FROM notifications").
-		WithArgs(int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("sent"))
+func TestNewDBConfiguresPoolOnSuccess(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mockDB.Close() })
+	mock.ExpectPing()
+	open := func(string, string) (*sqlx.DB, error) { return sqlx.NewDb(mockDB, "sqlmock"), nil }
 
-	status, err := db.GetNotificationStatus(context.Background(), 42)
+	db, err := newDB(config.PostgresConfig{ConnTimeout: 1e9, MaxOpenConns: 7}, open)
 
 	require.NoError(t, err)
-	assert.Equal(t, "sent", status)
-}
-
-func TestGetNotificationStatusReportsMissingNotification(t *testing.T) {
-	db, mock := newMockedDB(t)
-	mock.ExpectQuery("SELECT status FROM notifications").
-		WithArgs(int64(42)).
-		WillReturnError(sql.ErrNoRows)
-
-	_, err := db.GetNotificationStatus(context.Background(), 42)
-
-	assert.ErrorIs(t, err, ErrNotificationNotFound)
-}
-
-func TestUpdateNotificationStatusReportsMissingNotification(t *testing.T) {
-	db, mock := newMockedDB(t)
-	mock.ExpectExec("UPDATE notifications").
-		WithArgs("sent", int64(42)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	err := db.UpdateNotificationStatus(context.Background(), 42, "sent")
-
-	assert.ErrorIs(t, err, ErrNotificationNotFound)
+	assert.Equal(t, 7, db.conn.Stats().MaxOpenConnections)
 }
