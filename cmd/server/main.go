@@ -2,133 +2,42 @@ package main
 
 import (
 	"context"
-	"log"
-	"net"
-	"net/http"
+	"io"
+	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/officiallysidsingh/go-notify/config"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
-	pb "github.com/officiallysidsingh/go-notify/api/generated"
-	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
-	"github.com/officiallysidsingh/go-notify/internal/metrics"
-	"github.com/officiallysidsingh/go-notify/internal/producer"
-	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
-	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
-	"github.com/officiallysidsingh/go-notify/internal/repository"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
+	"github.com/officiallysidsingh/go-notify/config"
+	"github.com/officiallysidsingh/go-notify/internal/app"
+	"github.com/officiallysidsingh/go-notify/internal/logging"
 )
 
 func main() {
-	// Load configuration from the config folder.
 	cfg, err := config.Load("./config")
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
+	exitOn(err)
+	exitOn(cfg.ValidateServer())
 
-	// Structured logging
-	logger, err := zap.NewProduction()
-	if err != nil {
-		panic(err)
-	}
-	sugar := logger.Sugar()
-	defer func() {
-		if err := logger.Sync(); err != nil {
-			sugar.Errorw("failed to sync logger", "error", err)
-		}
-	}()
+	logger, err := logging.New(cfg.Logging.Level)
+	exitOn(err)
+	defer func() { _ = logger.Sync() }()
 
-	// Start Prometheus metrics HTTP server in separate goroutine
-	go func() {
-		sugar.Infof("Starting metrics server on %s", cfg.Metrics.Port)
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(cfg.Metrics.Port, nil); err != nil {
-			sugar.Fatalf("Metrics HTTP server failed: %v", err)
-		}
-	}()
-
-	// Init RabbitMQ Producer
-	producer, err := producer.NewProducer(
-		cfg.RabbitMQ.URL,
-		rabbitmq.Dial,
-		logger,
-	)
-	if err != nil {
-		sugar.Fatalf("Failed to initialize RabbitMQ: %v", err)
-	}
-	defer producer.Close()
-
-	// Connect to Postgres DB
-	database, err := repository.NewDB(cfg.Postgres)
-	if err != nil {
-		sugar.Fatalf("Failed to initialize PostgresDB: %v", err)
-	}
-
-	defer func() {
-		if err := database.Close(); err != nil {
-			log.Printf("error closing database: %v", err)
-		}
-	}()
-
-	// Connect to Rate Limiter
-	limiter := ratelimiter.NewRateLimiter(
-		cfg.Redis.Addr,
-		cfg.Redis.Limit,
-		cfg.Redis.Window,
-	)
-
-	defer func() {
-		if err := limiter.Close(); err != nil {
-			log.Printf("error closing rate limiter: %v", err)
-		}
-	}()
-
-	// Start gRPC Server
-	listener, err := net.Listen("tcp", cfg.GRPC.Port)
-	if err != nil {
-		sugar.Fatalf("Failed to listen on port %s: %v", cfg.GRPC.Port, err)
-	}
-
-	// Create gRPC server with integrated notification service
-	server := grpcserver.NewNotificationServer(grpcserver.Dependencies{
-		Publisher:   producer,
-		Store:       database,
-		RateLimiter: limiter,
-		Metrics:     metrics.NewServer(prometheus.DefaultRegisterer),
-		Logger:      logger,
-	})
-	grpcServer := grpc.NewServer()
-	pb.RegisterNotificationServiceServer(grpcServer, server)
-
-	// Register gRPC health service
-	healthServer := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-
-	// Mark the server as serving
-	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-
-	// Register reflection service for debugging
-	reflection.Register(grpcServer)
-
-	// Finish in-flight requests on SIGINT/SIGTERM so the deferred cleanup runs
-	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-shutdown.Done()
-		sugar.Info("Shutting down gRPC server")
-		grpcServer.GracefulStop()
-	}()
 
-	sugar.Infof("gRPC server running on %s", cfg.GRPC.Port)
-	if err := grpcServer.Serve(listener); err != nil {
-		sugar.Errorf("Failed to serve gRPC server: %v", err)
+	if err := app.RunServer(ctx, cfg, logger); err != nil {
+		logger.Error("server exited with error", zap.Error(err))
+		stop()
+		_ = logger.Sync()
+		os.Exit(1)
+	}
+}
+
+// exitOn reports a startup error on stderr (the logger is not up yet) and exits.
+func exitOn(err error) {
+	if err != nil {
+		_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
+		os.Exit(1)
 	}
 }
