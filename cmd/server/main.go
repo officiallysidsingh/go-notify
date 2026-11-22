@@ -9,11 +9,13 @@ import (
 	"syscall"
 
 	"github.com/officiallysidsingh/go-notify/config"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
+	"github.com/officiallysidsingh/go-notify/internal/metrics"
 	"github.com/officiallysidsingh/go-notify/internal/producer"
 	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
@@ -93,7 +95,13 @@ func main() {
 	}
 
 	// Create gRPC server with integrated notification service
-	server := grpcserver.NewNotificationServer(producer, database, limiter)
+	server := grpcserver.NewNotificationServer(grpcserver.Dependencies{
+		Publisher:   producer,
+		Store:       database,
+		RateLimiter: limiter,
+		Metrics:     metrics.NewServer(prometheus.DefaultRegisterer),
+		Logger:      logger,
+	})
 	grpcServer := grpc.NewServer()
 	pb.RegisterNotificationServiceServer(grpcServer, server)
 
