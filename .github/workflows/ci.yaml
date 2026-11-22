@@ -159,6 +159,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: arduino/setup-protoc@v3.0.0
+        with:
+          version: "27.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Go protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.1
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: make proto
       - uses: docker/setup-buildx-action@v3.6.1
       - name: Build server image
         run: |
