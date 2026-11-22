@@ -1,216 +1,246 @@
 package producer
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"log"
+	"sync"
 	"time"
 
 	"github.com/streadway/amqp"
+	"go.uber.org/zap"
+
+	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 )
 
+const (
+	startupConnectAttempts = 5
+	publishAttempts        = 3
+
+	defaultStartupConnectDelay = 2 * time.Second
+	defaultPublishRetryDelay   = time.Second
+	defaultConfirmTimeout      = 5 * time.Second
+)
+
+var errNotConfirmed = errors.New("broker did not confirm the message")
+
+// RabbitMQProducer publishes with broker confirms and reconnects after a
+// failed publish, so a broker restart does not leave it permanently broken.
 type RabbitMQProducer struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
+	url    string
+	dial   rabbitmq.Dialer
+	logger *zap.Logger
+
+	startupConnectDelay time.Duration
+	publishRetryDelay   time.Duration
+	confirmTimeout      time.Duration
+
+	// Confirms are matched to publishes by order, so publishing is serialized.
+	mu       sync.Mutex
+	conn     rabbitmq.Connection
+	channel  rabbitmq.Channel
+	confirms <-chan amqp.Confirmation
 }
 
-// Init RabbitMQ Producer
-func NewProducer(url string) (*RabbitMQProducer, error) {
-	var conn *amqp.Connection
-	var err error
-
-	// Retry connection up to 5 times
-	for i := range [5]int{} {
-		conn, err = amqp.Dial(url)
-		if err == nil {
-			break
-		}
-		log.Printf("RabbitMQ connection failed. Retrying... (%d/5)", i+1)
-		time.Sleep(2 * time.Second)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open a channel: %w", err)
-	}
-
-	producer := &RabbitMQProducer{
-		conn:    conn,
-		channel: ch,
-	}
-
-	// Ensure exchanges and queues are created
-	if err := producer.SetupExchangesAndQueues(); err != nil {
-		producer.Close() // Close connection on failure
-		return nil, fmt.Errorf("failed to setup exchanges and queues: %w", err)
-	}
-
-	return producer, nil
-}
-
-// Declare necessary exchanges and queues
-func (p *RabbitMQProducer) SetupExchangesAndQueues() error {
-	// Declaring Dead Letter Exchange (DLX)
-	if err := p.channel.ExchangeDeclare(
-		"dead_letter_exchange",
-		"direct",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	); err != nil {
-		return err
-	}
-
-	// Declaring Dead Letter Queue (DLQ)
-	_, err := p.channel.QueueDeclare(
-		"dead_letter_queue",
-		true,
-		false,
-		false,
-		false,
-		nil,
+// NewProducer connects to the broker, retrying while it starts up.
+func NewProducer(url string, dial rabbitmq.Dialer, logger *zap.Logger) (*RabbitMQProducer, error) {
+	return newProducer(
+		url, dial, logger,
+		defaultStartupConnectDelay, defaultPublishRetryDelay, defaultConfirmTimeout,
 	)
-	if err != nil {
-		return err
+}
+
+func newProducer(
+	url string,
+	dial rabbitmq.Dialer,
+	logger *zap.Logger,
+	startupDelay, retryDelay, confirmTimeout time.Duration,
+) (*RabbitMQProducer, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	producer := &RabbitMQProducer{
+		url:                 url,
+		dial:                dial,
+		logger:              logger,
+		startupConnectDelay: startupDelay,
+		publishRetryDelay:   retryDelay,
+		confirmTimeout:      confirmTimeout,
 	}
 
-	// Bind DLQ to DLX with fixed routing key
-	if err := p.channel.QueueBind(
-		"dead_letter_queue",
-		"dead_letter",
-		"dead_letter_exchange",
-		false,
-		nil,
-	); err != nil {
-		return err
-	}
-
-	// Declaring Topic Exchange for Notification Type based routing
-	if err := p.channel.ExchangeDeclare(
-		"notification_exchange_topic",
-		"topic",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	); err != nil {
-		return err
-	}
-
-	// Declaring Fanout Exchange for broadcasting to all channels
-	if err := p.channel.ExchangeDeclare(
-		"notification_exchange_fanout",
-		"fanout",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	); err != nil {
-		return err
-	}
-
-	// Enable Dead Lettering
-	queueArgs := amqp.Table{
-		"x-dead-letter-exchange":    "dead_letter_exchange",
-		"x-dead-letter-routing-key": "dead_letter",
-	}
-
-	// Queues for each notification type
-	queues := []struct {
-		Name       string
-		BindingKey string
-	}{
-		{"queue_email", "email"},
-		{"queue_sms", "sms"},
-		{"queue_push", "push"},
-	}
-
-	for _, q := range queues {
-		// Declare each notification type queue
-		_, err := p.channel.QueueDeclare(
-			q.Name,
-			true,
-			false,
-			false,
-			false,
-			queueArgs,
+	var err error
+	for attempt := 1; attempt <= startupConnectAttempts; attempt++ {
+		if err = producer.connect(); err == nil {
+			return producer, nil
+		}
+		logger.Warn("RabbitMQ connection failed, retrying",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", startupConnectAttempts),
+			zap.Error(err),
 		)
-		if err != nil {
-			return err
-		}
-
-		// Bind queue to topic exchange
-		if err := p.channel.QueueBind(
-			q.Name,
-			q.BindingKey,
-			"notification_exchange_topic",
-			false,
-			nil,
-		); err != nil {
-			return err
-		}
-
-		// Bind queue to fanout exchange
-		if err := p.channel.QueueBind(
-			q.Name,
-			"",
-			"notification_exchange_fanout",
-			false,
-			nil,
-		); err != nil {
-			return err
+		if attempt < startupConnectAttempts {
+			time.Sleep(startupDelay)
 		}
 	}
+	return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+}
 
+// Ping reconnects if the connection is gone, so an idle producer recovers
+// without waiting for the next publish.
+func (p *RabbitMQProducer) Ping(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.conn == nil || p.conn.IsClosed() {
+		p.disconnect()
+		if err := p.connect(); err != nil {
+			return fmt.Errorf("rabbitmq unreachable: %w", err)
+		}
+	}
 	return nil
 }
 
-// To send a message to the queue
-func (p *RabbitMQProducer) Publish(exchange, routingKey, message string) error {
-	var err error
-
-	// Retry upto 3 times
-	for i := range [3]int{} {
-		err = p.channel.Publish(
-			exchange,
-			routingKey,
-			false,
-			false,
-			amqp.Publishing{
-				ContentType:  "application/json",
-				Body:         []byte(message),
-				DeliveryMode: amqp.Persistent,
-			},
-		)
-		if err == nil {
-			return nil
-		}
-
-		log.Printf("Failed to publish message. Retrying... (%d/3)", i+1)
-
-		// Wait before retrying
-		time.Sleep(1 * time.Second)
+func (p *RabbitMQProducer) connect() error {
+	conn, err := p.dial(p.url)
+	if err != nil {
+		return fmt.Errorf("failed to dial: %w", err)
 	}
 
-	return fmt.Errorf("failed to publish message after retries: %w", err)
+	channel, confirms, err := p.openConfirmingChannel(conn)
+	if err != nil {
+		p.closeQuietly(conn)
+		return err
+	}
+
+	p.conn, p.channel, p.confirms = conn, channel, confirms
+	return nil
 }
 
-// To shut down connection
-func (p *RabbitMQProducer) Close() {
-	if p.channel != nil {
-		if err := p.channel.Close(); err != nil {
-			log.Printf("error closing producer channel: %v", err)
+func (p *RabbitMQProducer) openConfirmingChannel(conn rabbitmq.Connection) (rabbitmq.Channel, <-chan amqp.Confirmation, error) {
+	channel, err := conn.Channel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open a channel: %w", err)
+	}
+	if err := rabbitmq.DeclareTopology(channel); err != nil {
+		p.closeChannelQuietly(channel)
+		return nil, nil, err
+	}
+	const noWait = false
+	if err := channel.Confirm(noWait); err != nil {
+		p.closeChannelQuietly(channel)
+		return nil, nil, fmt.Errorf("failed to enable publisher confirms: %w", err)
+	}
+	return channel, channel.NotifyPublish(make(chan amqp.Confirmation, 1)), nil
+}
+
+// Publish delivers body to the exchange and returns once the broker has
+// confirmed it. A message may be delivered more than once if a confirm is lost.
+func (p *RabbitMQProducer) Publish(
+	ctx context.Context,
+	exchange, routingKey string,
+	body []byte,
+) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("failed to publish message to %s: %w", exchange, err)
+	}
+
+	var err error
+	for attempt := 1; attempt <= publishAttempts; attempt++ {
+		if err = p.publishOnce(ctx, exchange, routingKey, body); err == nil {
+			return nil
+		}
+		p.disconnect()
+		p.logger.Warn("failed to publish message",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", publishAttempts),
+			zap.Error(err),
+		)
+		if attempt == publishAttempts {
+			break
+		}
+		if !waitOrDone(ctx, p.publishRetryDelay) {
+			err = fmt.Errorf("%w (last error: %w)", ctx.Err(), err)
+			break
 		}
 	}
-	if p.conn != nil {
-		if err := p.conn.Close(); err != nil {
-			log.Printf("error closing producer connection: %v", err)
+	return fmt.Errorf("failed to publish message to %s: %w", exchange, err)
+}
+
+func (p *RabbitMQProducer) publishOnce(
+	ctx context.Context,
+	exchange, routingKey string,
+	body []byte,
+) error {
+	if p.conn == nil || p.conn.IsClosed() {
+		p.disconnect()
+		if err := p.connect(); err != nil {
+			return err
 		}
+	}
+
+	const mandatory, immediate = false, false
+	err := p.channel.Publish(exchange, routingKey, mandatory, immediate, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         body,
+		DeliveryMode: amqp.Persistent,
+	})
+	if err != nil {
+		return err
+	}
+	return p.awaitConfirm(ctx)
+}
+
+func (p *RabbitMQProducer) awaitConfirm(ctx context.Context) error {
+	select {
+	case confirmation, open := <-p.confirms:
+		if !open || !confirmation.Ack {
+			return errNotConfirmed
+		}
+		return nil
+	case <-time.After(p.confirmTimeout):
+		return errNotConfirmed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// disconnect drops the connection so the next publish starts on a fresh one,
+// with no stale confirms left over from a failed publish.
+func (p *RabbitMQProducer) disconnect() {
+	if p.conn != nil {
+		p.closeQuietly(p.conn)
+	}
+	p.conn, p.channel, p.confirms = nil, nil, nil
+}
+
+func (p *RabbitMQProducer) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.disconnect()
+}
+
+func (p *RabbitMQProducer) closeQuietly(conn rabbitmq.Connection) {
+	if err := conn.Close(); err != nil && !errors.Is(err, amqp.ErrClosed) {
+		p.logger.Error("error closing producer connection", zap.Error(err))
+	}
+}
+
+func (p *RabbitMQProducer) closeChannelQuietly(ch rabbitmq.Channel) {
+	if err := ch.Close(); err != nil && !errors.Is(err, amqp.ErrClosed) {
+		p.logger.Error("error closing producer channel", zap.Error(err))
+	}
+}
+
+func waitOrDone(ctx context.Context, delay time.Duration) bool {
+	select {
+	case <-time.After(delay):
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

@@ -2,101 +2,161 @@ package grpc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"log"
+	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/officiallysidsingh/go-notify/api/generated"
-	"github.com/officiallysidsingh/go-notify/internal/producer"
-	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
+	"github.com/officiallysidsingh/go-notify/internal/auth"
+	"github.com/officiallysidsingh/go-notify/internal/metrics"
+	"github.com/officiallysidsingh/go-notify/internal/notification"
+	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 )
 
-// NotificationMessage defines the payload published to RabbitMQ.
-type NotificationMessage struct {
-	NotificationID int64  `json:"notification_id"`
-	UserID         string `json:"user_id"`
-	Title          string `json:"title"`
-	Priority       string `json:"priority"`
-	Message        string `json:"message"`
-	Type           string `json:"type"`
+type Publisher interface {
+	Publish(ctx context.Context, exchange, routingKey string, body []byte) error
 }
 
-// Prometheus total notification counter
-var notificationsReceived = prometheus.NewCounter(
-	prometheus.CounterOpts{
-		Name: "notifications_received_total",
-		Help: "Total number of notifications received via gRPC",
-	},
-)
+type NotificationStore interface {
+	InsertNotification(ctx context.Context, message notification.Message) (int64, error)
+	MarkQueued(ctx context.Context, id int64) error
+	UpdateNotificationStatus(ctx context.Context, id int64, status string) error
+	GetNotificationStatus(ctx context.Context, id int64) (string, error)
+}
+
+type RateLimiter interface {
+	Allow(ctx context.Context, key string) (bool, error)
+}
+
+const statusUpdateTimeout = 5 * time.Second
+
+type Dependencies struct {
+	Publisher   Publisher
+	Store       NotificationStore
+	RateLimiter RateLimiter
+	Metrics     *metrics.Server
+	Logger      *zap.Logger
+}
 
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
-	producer    *producer.RabbitMQProducer
-	db          *repository.DB
-	rateLimiter *ratelimiter.RateLimiter
+	deps Dependencies
 }
 
-// Init prometheus counter
-func init() {
-	prometheus.MustRegister(notificationsReceived)
+func NewNotificationServer(deps Dependencies) *NotificationServer {
+	return &NotificationServer{deps: deps}
 }
 
-// Init gRPC server
-func NewNotificationServer(
-	producer *producer.RabbitMQProducer,
-	db *repository.DB,
-	limiter *ratelimiter.RateLimiter,
-) *NotificationServer {
-	return &NotificationServer{
-		producer:    producer,
-		db:          db,
-		rateLimiter: limiter,
-	}
-}
-
-// To handle notification requests
 func (s *NotificationServer) SendNotification(
 	ctx context.Context,
 	req *pb.NotificationRequest,
-) (
-	*pb.NotificationResponse,
-	error,
-) {
-	// Rate limiting
-	allowed, err := s.rateLimiter.Allow(ctx, req.UserId)
+) (*pb.NotificationResponse, error) {
+	if err := validateSend(req); err != nil {
+		return nil, err
+	}
+	if err := s.checkRateLimit(ctx, req.UserId); err != nil {
+		return nil, err
+	}
+	s.deps.Metrics.Received.Inc()
+
+	notificationID, err := s.storeNotification(ctx, req)
 	if err != nil {
-		log.Printf("Rate limiter error: %v", err)
-		return &pb.NotificationResponse{
-				Success: false,
-				Error:   "Rate limiter error",
-			}, errors.New(
-				"rate limiter error",
-			)
+		return nil, err
+	}
+	if err := s.enqueueNotification(ctx, notificationID, req); err != nil {
+		return nil, err
+	}
+	s.markQueued(ctx, notificationID)
+
+	return &pb.NotificationResponse{Success: true, NotificationId: notificationID}, nil //nolint:staticcheck // deprecated field kept populated
+}
+
+func (s *NotificationServer) checkRateLimit(ctx context.Context, userID string) error {
+	allowed, err := s.deps.RateLimiter.Allow(ctx, userID)
+	if err != nil {
+		s.deps.Logger.Warn("rate limiter unavailable",
+			zap.String("caller", auth.CallerFromContext(ctx)),
+			zap.Error(err),
+		)
+		return status.Error(codes.Unavailable, "rate limiter unavailable")
 	}
 	if !allowed {
-		return &pb.NotificationResponse{
-				Success: false,
-				Error:   "Rate limit exceeded",
-			}, errors.New(
-				"rate limit exceeded",
-			)
+		s.deps.Metrics.RateLimited.Inc()
+		return status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	}
+	return nil
+}
 
-	notificationsReceived.Inc()
-	log.Printf("Received notification request for user: %s", req.UserId)
-
-	// Insert notification into db
-	notificationID, err := s.db.InsertNotification(ctx, req.UserId, req.Message, "pending")
+func (s *NotificationServer) storeNotification(
+	ctx context.Context,
+	req *pb.NotificationRequest,
+) (int64, error) {
+	notificationID, err := s.deps.Store.InsertNotification(ctx, messageFor(0, req))
 	if err != nil {
-		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
+		s.deps.Logger.Error("failed to store notification", zap.Error(err))
+		return 0, status.Error(codes.Internal, "failed to store notification")
 	}
+	return notificationID, nil
+}
 
-	// Prepare payload
-	payload := NotificationMessage{
+func (s *NotificationServer) enqueueNotification(
+	ctx context.Context,
+	notificationID int64,
+	req *pb.NotificationRequest,
+) error {
+	err := s.publish(ctx, notificationID, req)
+	if err == nil {
+		return nil
+	}
+	s.deps.Logger.Error("failed to enqueue notification",
+		zap.Int64("notification_id", notificationID),
+		zap.Error(err),
+	)
+	s.markFailed(ctx, notificationID)
+	return status.Error(codes.Unavailable, "failed to enqueue notification")
+}
+
+func (s *NotificationServer) publish(
+	ctx context.Context,
+	notificationID int64,
+	req *pb.NotificationRequest,
+) error {
+	body := messageFor(notificationID, req).JSON()
+	return s.deps.Publisher.Publish(ctx, rabbitmq.NotificationExchange, req.Type, body)
+}
+
+// A failure here is not fatal: the notification stays pending and the sweep
+// republishes it.
+func (s *NotificationServer) markQueued(ctx context.Context, notificationID int64) {
+	if err := s.deps.Store.MarkQueued(ctx, notificationID); err != nil {
+		s.deps.Logger.Warn("failed to mark notification queued",
+			zap.Int64("notification_id", notificationID),
+			zap.Error(err),
+		)
+	}
+}
+
+// The request context may already be cancelled when enqueueing fails, so the
+// status update runs on its own context.
+func (s *NotificationServer) markFailed(parent context.Context, notificationID int64) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), statusUpdateTimeout)
+	defer cancel()
+
+	err := s.deps.Store.UpdateNotificationStatus(ctx, notificationID, notification.StatusFailed)
+	if err != nil {
+		s.deps.Logger.Error("failed to mark notification failed",
+			zap.Int64("notification_id", notificationID),
+			zap.Error(err),
+		)
+	}
+}
+
+func messageFor(notificationID int64, req *pb.NotificationRequest) notification.Message {
+	return notification.Message{
 		NotificationID: notificationID,
 		UserID:         req.UserId,
 		Title:          req.Title,
@@ -104,39 +164,25 @@ func (s *NotificationServer) SendNotification(
 		Message:        req.Message,
 		Type:           req.Type,
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
-	}
-
-	// Publish the payload to RabbitMQ
-	err = s.producer.Publish("notification_exchange_topic", req.Type, string(data))
-	if err != nil {
-		return &pb.NotificationResponse{Success: false, Error: err.Error()}, err
-	}
-
-	return &pb.NotificationResponse{Success: true}, nil
 }
 
 func (s *NotificationServer) GetNotificationStatus(
 	ctx context.Context,
 	req *pb.StatusRequest,
-) (
-	*pb.StatusResponse,
-	error,
-) {
-	var status string
-	query := "SELECT status FROM notifications WHERE id=$1"
-
-	err := s.db.Conn.Get(&status, query, req.NotificationId)
-	if err != nil {
-		return &pb.StatusResponse{
-			Status: "",
-			Error:  fmt.Sprintf("Notification not found: %v", err.Error()),
-		}, err
+) (*pb.StatusResponse, error) {
+	if err := validateStatus(req); err != nil {
+		return nil, err
 	}
-
-	return &pb.StatusResponse{
-		Status: status,
-	}, nil
+	storedStatus, err := s.deps.Store.GetNotificationStatus(ctx, req.NotificationId)
+	if errors.Is(err, repository.ErrNotificationNotFound) {
+		return nil, status.Errorf(codes.NotFound, "notification %d not found", req.NotificationId)
+	}
+	if err != nil {
+		s.deps.Logger.Error("failed to get notification status",
+			zap.Int64("notification_id", req.NotificationId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to get notification status")
+	}
+	return &pb.StatusResponse{Status: storedStatus}, nil
 }

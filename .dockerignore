@@ -1,0 +1,13 @@
+.git
+.github
+.superpowers
+docs
+*.md
+.gitignore
+.dockerignore
+.golangci.yaml
+Makefile
+coverage.out
+deployments/docker-compose*.yaml
+scripts
+# Keep go.{mod,sum}, cmd/, internal/, config/, api/, db/.

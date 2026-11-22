@@ -1,28 +1,19 @@
-# Use the official Golang image as the base image for building
-FROM golang:1.23 AS builder
-WORKDIR /app
+# syntax=docker/dockerfile:1
 
-# Copy go.mod and go.sum files to the working directory
+FROM --platform=$BUILDPLATFORM golang:1.26.11-bookworm AS builder
+WORKDIR /src
+ARG TARGETARCH
+
+# Copy modules first for better layer caching.
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH
+RUN go build -trimpath -ldflags="-s -w" -o /out/worker_service ./cmd/worker
 
-# Disable CGO to build a fully static binary
-ENV CGO_ENABLED=0
-
-# Build the gRPC server binary
-RUN go build -o worker_service ./cmd/worker/main.go
-
-FROM debian:bullseye-slim
-
-RUN apt-get update && \
-    apt-get install -y bash ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY --from=builder /app/worker_service /app/worker_service
-
-# Command to run the worker service
-CMD ["/app/worker_service"]
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /out/worker_service /app/worker_service
+EXPOSE 9092
+USER nonroot:nonroot
+ENTRYPOINT ["/app/worker_service"]

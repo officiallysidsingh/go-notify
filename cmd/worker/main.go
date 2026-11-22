@@ -1,50 +1,49 @@
 package main
 
 import (
-	"log"
+	"context"
+	"io"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"go.uber.org/zap"
 
 	"github.com/officiallysidsingh/go-notify/config"
-	"github.com/officiallysidsingh/go-notify/internal/consumer"
-	"github.com/officiallysidsingh/go-notify/internal/repository"
+	"github.com/officiallysidsingh/go-notify/internal/app"
+	"github.com/officiallysidsingh/go-notify/internal/logging"
 )
 
 func main() {
-	// Load configuration from the config folder
-	config.LoadConfig("./config")
+	os.Exit(run())
+}
 
-	// Connect to PostgreSQL
-	dbConn, err := repository.NewDB(config.AppConfig.Postgres)
+// run returns the process exit code so deferred cleanup runs before os.Exit.
+func run() int {
+	cfg, err := config.Load("./config")
+	exitOn(err)
+	exitOn(cfg.ValidateWorker())
+
+	logger, err := logging.New(cfg.Logging.Level)
+	exitOn(err)
+	defer func() { _ = logger.Sync() }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.RunWorker(ctx, cfg, logger); err != nil {
+		logger.Error("worker exited with error", zap.Error(err))
+		stop()
+		_ = logger.Sync()
+		return 1
+	}
+	return 0
+}
+
+// exitOn reports a startup error on stderr (the logger is not up yet) and exits.
+func exitOn(err error) {
 	if err != nil {
-		log.Fatalf("Failed to initialize PostgresDB: %v", err)
+		_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
+		os.Exit(1)
 	}
-
-	defer func() {
-		if err := dbConn.Close(); err != nil {
-			log.Printf("error closing dbConn: %v", err)
-		}
-	}()
-
-	// Create a new consumer with a global worker pool
-	consumer, err := consumer.NewConsumer(config.AppConfig.RabbitMQ.URL, 10, dbConn)
-	if err != nil {
-		log.Fatalf("Failed to initialize consumer: %v", err)
-	}
-
-	// Define queues
-	queues := []string{
-		"dead_letter_queue",
-		"queue_email",
-		"queue_sms",
-		"queue_push",
-	}
-
-	// Start the consumer
-	if err := consumer.Start(queues); err != nil {
-		log.Fatalf("Failed to start consumer: %v", err)
-	}
-
-	log.Println("Consumer is up and running, waiting for messages...")
-
-	// Block forever
-	select {}
 }

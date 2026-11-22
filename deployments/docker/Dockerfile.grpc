@@ -1,38 +1,36 @@
-# Use the official Golang image as the base image
-FROM golang:1.23 AS builder
-WORKDIR /app
+# syntax=docker/dockerfile:1
 
-# Copy go.mod and go.sum files to the working directory
+FROM --platform=$BUILDPLATFORM golang:1.26.11-bookworm AS builder
+WORKDIR /src
+ARG TARGETARCH
+
+# Install curl for the health-probe download, then clean up.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Download grpc-health-probe for the target architecture and verify its SHA-256.
+ARG HEALTH_PROBE_VERSION=v0.4.37
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64)  sha="8302d54fc41d4ffbfea6871b6a04584265d5eabbe738aee2966f9a574b6f17d1"; arch="amd64" ;; \
+      arm64)  sha="8ebe934e7cf29a65ca31d671a97949467fba6977d656b5e6d6c40902ae7402f6"; arch="arm64" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${HEALTH_PROBE_VERSION}/grpc_health_probe-linux-${arch}" -o /tmp/grpc-health-probe; \
+    echo "${sha}  /tmp/grpc-health-probe" | sha256sum -c -; \
+    chmod +x /tmp/grpc-health-probe
+
+# Copy modules first for better layer caching.
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH
+RUN go build -trimpath -ldflags="-s -w" -o /out/grpc_service ./cmd/server
 
-# Download grpc-health-probe.
-RUN curl -L https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.37/grpc_health_probe-linux-amd64 \
-    -o /usr/local/bin/grpc-health-probe && \
-    chmod +x /usr/local/bin/grpc-health-probe
-
-# Disable CGO to build a fully static binary
-ENV CGO_ENABLED=0
-
-# Build the gRPC server binary.
-RUN go build -o grpc_service ./cmd/server/main.go
-
-FROM debian:bullseye-slim
-
-RUN apt-get update && \
-    apt-get install -y bash ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY --from=builder /app/grpc_service /app/grpc_service
-
-# Copy the grpc-health-probe binary from the builder stage.
-COPY --from=builder /usr/local/bin/grpc-health-probe /usr/local/bin/grpc-health-probe
-
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /out/grpc_service /app/grpc_service
+COPY --from=builder /tmp/grpc-health-probe /usr/local/bin/grpc-health-probe
 EXPOSE 50051
-
-# Command to run the gRPC service
-CMD ["/app/grpc_service"]
+USER nonroot:nonroot
+ENTRYPOINT ["/app/grpc_service"]

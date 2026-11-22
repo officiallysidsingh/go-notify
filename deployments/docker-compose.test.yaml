@@ -1,0 +1,29 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["55672:5672", "55673:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: go_notify_test
+      POSTGRES_USER: go_notify_test
+      POSTGRES_PASSWORD: go_notify_test
+    ports: ["55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U go_notify_test -d go_notify_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["56379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

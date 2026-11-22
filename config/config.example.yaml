@@ -1,5 +1,10 @@
 grpc:
   port: ":50051" # gRPC server port
+  reflection: false # Enable gRPC server reflection (leave off in production)
+
+auth:
+  apiKeys: "local-dev:change-me" # Comma-separated name:key pairs accepted by the server
+  disabled: false # Skip API key authentication (local development only)
 
 rabbitmq:
   url: "amqp://user:password@rabbitmq_host:5672/" # RabbitMQ connection URL
@@ -8,9 +13,9 @@ postgres:
   DataSourceName: "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable" # PostgreSQL DataSourceName
   MaxOpenConns: 100 # PostgreSQL MaxOpenConns
   MaxIdleConns: 25 # PostgreSQL MaxIdleConns
-  ConnMaxLifetime: 20 * time.Minute # PostgreSQL ConnMaxLifetime
-  ConnMaxIdleTime: 5 * time.Minute # PostgreSQL ConnMaxIdleTime
-  ConnTimeout: 3 * time.Second # PostgreSQL ConnTimeout
+  ConnMaxLifetime: "20m" # PostgreSQL ConnMaxLifetime
+  ConnMaxIdleTime: "5m" # PostgreSQL ConnMaxIdleTime
+  ConnTimeout: "3s" # PostgreSQL ConnTimeout
 
 redis:
   addr: "redis_host:6379" # Redis address
@@ -24,4 +29,22 @@ logging:
   level: "info" # Logging level (debug, info, warn, error)
 
 ntfy:
+  baseURL: "https://ntfy.sh" # ntfy server base URL
   topic: "notification-topic" # Topic for push notifications
+  token: "" # Optional ntfy access token
+  timeout: "10s" # Timeout for each push request
+
+worker:
+  concurrency: 10 # Number of messages processed in parallel
+  sendAttempts: 3 # Push attempts per message before giving up
+  retryDelay: "2s" # Delay between push attempts
+  metricsPort: ":9092" # Worker metrics and health server port
+
+sweep:
+  interval: "1m" # How often stuck notifications are swept
+  staleAfter: "5m" # Age after which a pending notification counts as stuck
+  batchSize: 100 # Notifications republished per sweep
+  maxAttempts: 3 # Republish attempts before a notification is marked failed
+
+health:
+  interval: "10s" # How often dependency health is checked

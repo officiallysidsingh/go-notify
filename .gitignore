@@ -30,3 +30,6 @@ go.work.sum
 
 # binary files
 bin/
+
+# coverage profile
+coverage.out

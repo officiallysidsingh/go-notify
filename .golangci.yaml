@@ -1,0 +1,67 @@
+version: "2"
+run:
+  tests: true
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - errcheck
+    - errorlint
+    - forbidigo
+    - funlen
+    - gocritic
+    - gocyclo
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^log\.
+          msg: use the injected *zap.Logger instead of the stdlib log package
+        - pattern: ^fmt\.Print
+          msg: use the injected *zap.Logger instead of fmt.Print*
+        - pattern: ^println$
+          msg: use the injected *zap.Logger instead of println
+    funlen:
+      lines: 40
+      statements: 30
+    gocyclo:
+      min-complexity: 10
+    revive:
+      rules:
+        - name: var-naming
+        - name: package-comments
+        - name: exported
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - forbidigo
+          - funlen
+          - gocyclo
+        path: _test\.go
+    paths:
+      - api/generated
+      - internal/integration
+      - internal/rabbitmq/rabbitmqtest
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

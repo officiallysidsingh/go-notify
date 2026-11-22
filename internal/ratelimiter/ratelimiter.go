@@ -8,14 +8,23 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
-// Implements a simple counter-based rate limiter
+// Incrementing and setting the expiry must happen atomically: a counter left
+// without an expiry would block its user forever.
+var incrementWithExpiry = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if redis.call('PTTL', KEYS[1]) < 0 then
+	redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`)
+
+// RateLimiter is a fixed-window counter backed by Redis.
 type RateLimiter struct {
 	client *redis.Client
 	limit  int
 	window time.Duration
 }
 
-// Creates a new RateLimiter
 func NewRateLimiter(addr string, limit int, window time.Duration) *RateLimiter {
 	client := redis.NewClient(&redis.Options{
 		Addr: addr,
@@ -28,18 +37,26 @@ func NewRateLimiter(addr string, limit int, window time.Duration) *RateLimiter {
 	}
 }
 
-// Returns true if key (userID) is within rate limits
+// Allow reports whether key is still within its rate limit for the current window.
 func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
-	fullKey := fmt.Sprintf("rate:%s", key)
-	count, err := rl.client.Incr(ctx, fullKey).Result()
+	counterKey := fmt.Sprintf("rate:%s", key)
+	count, err := incrementWithExpiry.Run(
+		ctx, rl.client, []string{counterKey}, rl.window.Milliseconds(),
+	).Int64()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to count request for %q: %w", key, err)
 	}
-	if count == 1 {
-		rl.client.Expire(ctx, fullKey, rl.window)
+	return count <= int64(rl.limit), nil
+}
+
+func (rl *RateLimiter) Close() error {
+	return rl.client.Close()
+}
+
+// Ping verifies the Redis connection is reachable.
+func (rl *RateLimiter) Ping(ctx context.Context) error {
+	if err := rl.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("rate limiter unreachable: %w", err)
 	}
-	if count > int64(rl.limit) {
-		return false, nil
-	}
-	return true, nil
+	return nil
 }
