@@ -17,6 +17,7 @@ import (
 	grpcserver "github.com/officiallysidsingh/go-notify/internal/grpc"
 	"github.com/officiallysidsingh/go-notify/internal/metrics"
 	"github.com/officiallysidsingh/go-notify/internal/producer"
+	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 	"github.com/officiallysidsingh/go-notify/internal/ratelimiter"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 
@@ -57,6 +58,8 @@ func main() {
 	// Init RabbitMQ Producer
 	producer, err := producer.NewProducer(
 		cfg.RabbitMQ.URL,
+		rabbitmq.Dial,
+		logger,
 	)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize RabbitMQ: %v", err)
