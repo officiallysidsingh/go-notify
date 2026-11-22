@@ -18,8 +18,13 @@ import (
 
 const (
 	defaultReconnectDelay = 5 * time.Second
-	processingTimeout     = time.Minute
+	defaultJobTimeout     = time.Minute
 )
+
+// ErrSessionAborted is the cancellation cause of in-flight work when the
+// broker connection is lost: the channel is gone, so deliveries stay unsettled
+// and the broker redelivers them. Any other context ending is a job timeout.
+var ErrSessionAborted = errors.New("consumer session aborted")
 
 // Options configures a Consumer.
 type Options struct {
@@ -27,6 +32,7 @@ type Options struct {
 	Workers        int
 	ReconnectDelay time.Duration // defaults to 5s
 	Dial           rabbitmq.Dialer
+	JobTimeout     time.Duration // per-delivery processing limit; defaults to 1m
 }
 
 // Consumer feeds deliveries from every notification queue to a shared worker
@@ -46,6 +52,9 @@ func NewConsumer(opts Options, processor *Processor, m *metrics.Worker, logger *
 	}
 	if opts.Workers < 1 {
 		opts.Workers = 1
+	}
+	if opts.JobTimeout <= 0 {
+		opts.JobTimeout = defaultJobTimeout
 	}
 	if opts.Dial == nil {
 		opts.Dial = rabbitmq.Dial
@@ -170,16 +179,19 @@ type workerPool struct {
 	stop       chan struct{}
 	forwarders sync.WaitGroup
 	workers    sync.WaitGroup
-	cancelWork context.CancelFunc
+	sessionCtx context.Context
+	cancelWork context.CancelCauseFunc
 }
 
 func (c *Consumer) startWorkers(streams []<-chan amqp.Delivery) *workerPool {
 	// In-flight work outlives shutdown on purpose: a notification is finished
-	// and settled rather than abandoned half-sent.
-	workCtx, cancel := context.WithTimeout(context.Background(), processingTimeout)
+	// and settled rather than abandoned half-sent. Only losing the connection
+	// cancels the session; each delivery also gets its own timeout.
+	sessionCtx, cancel := context.WithCancelCause(context.Background())
 	pool := &workerPool{
 		merged:     make(chan amqp.Delivery),
 		stop:       make(chan struct{}),
+		sessionCtx: sessionCtx,
 		cancelWork: cancel,
 	}
 	for _, stream := range streams {
@@ -191,7 +203,9 @@ func (c *Consumer) startWorkers(streams []<-chan amqp.Delivery) *workerPool {
 		go func() {
 			defer pool.workers.Done()
 			for delivery := range pool.merged {
-				c.processor.Process(workCtx, delivery)
+				jobCtx, cancelJob := context.WithTimeout(pool.sessionCtx, c.opts.JobTimeout)
+				c.processor.Process(jobCtx, delivery)
+				cancelJob()
 			}
 		}()
 	}
@@ -225,8 +239,8 @@ func (p *workerPool) shutdown(abort bool) {
 	p.forwarders.Wait()
 	close(p.merged)
 	if abort {
-		p.cancelWork()
+		p.cancelWork(ErrSessionAborted)
 	}
 	p.workers.Wait()
-	p.cancelWork()
+	p.cancelWork(context.Canceled)
 }

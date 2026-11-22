@@ -65,6 +65,10 @@ type consumerFixture struct {
 }
 
 func newConsumerFixture(dialer *rabbitmqtest.Dialer) *consumerFixture {
+	return newConsumerFixtureWithTimeout(dialer, 0)
+}
+
+func newConsumerFixtureWithTimeout(dialer *rabbitmqtest.Dialer, jobTimeout time.Duration) *consumerFixture {
 	fixture := &consumerFixture{
 		dialer:  dialer,
 		senders: map[string]*fakeSender{},
@@ -82,6 +86,7 @@ func newConsumerFixture(dialer *rabbitmqtest.Dialer) *consumerFixture {
 		Workers:        testWorkers,
 		ReconnectDelay: testReconnectDelay,
 		Dial:           dialer.Dialer(),
+		JobTimeout:     jobTimeout,
 	}, processor, fixture.metrics, zap.NewNop())
 	return fixture
 }
@@ -280,4 +285,23 @@ func TestConnectedReflectsConnectionState(t *testing.T) {
 
 	first.conn.FireClose(&amqp.Error{Reason: "gone"})
 	assert.Eventually(t, func() bool { return !fixture.consumer.Connected() }, waitFor, tick)
+}
+
+// Regression: one context shared by every job expired after the job timeout
+// and left all later deliveries unsettled.
+func TestRunProcessesMessagesAfterJobTimeoutHasElapsed(t *testing.T) {
+	const jobTimeout = 50 * time.Millisecond
+	session := newBrokerSession()
+	fixture := newConsumerFixtureWithTimeout(rabbitmqtest.NewDialer(session.conn), jobTimeout)
+	fixture.senders[notification.TypePush].honourContext = true
+	fixture.start(t)
+	fixture.waitConnected(t)
+
+	first, second := &fakeAcknowledger{}, &fakeAcknowledger{}
+	session.enqueue(t, notification.TypePush, first, testNotificationID)
+	require.Eventually(t, first.acked, waitFor, tick)
+	time.Sleep(2 * jobTimeout)
+	session.enqueue(t, notification.TypePush, second, testNotificationID+1)
+
+	assert.Eventually(t, second.acked, waitFor, tick)
 }

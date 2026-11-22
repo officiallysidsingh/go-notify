@@ -81,11 +81,13 @@ type fakeSender struct {
 	failures int
 	failWith error
 	hold     time.Duration
-	calls    int
-	started  chan struct{}
+	// honourContext makes Send fail with the context's error once it has ended.
+	honourContext bool
+	calls         int
+	started       chan struct{}
 }
 
-func (s *fakeSender) Send(context.Context, notification.Message) error {
+func (s *fakeSender) Send(ctx context.Context, _ notification.Message) error {
 	s.mu.Lock()
 	s.calls++
 	call := s.calls
@@ -95,6 +97,9 @@ func (s *fakeSender) Send(context.Context, notification.Message) error {
 	s.mu.Unlock()
 
 	time.Sleep(s.hold)
+	if s.honourContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if call <= s.failures {
 		if s.failWith != nil {
 			return s.failWith
@@ -315,7 +320,7 @@ func TestProcessUsesConfiguredDelayWithoutHint(t *testing.T) {
 func TestProcessStopsRetryingWhenContextEnds(t *testing.T) {
 	fixture := newProcessorFixture(time.Hour)
 	fixture.sender.failures = testMaxAttempts
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 
 	go func() {
@@ -323,7 +328,7 @@ func TestProcessStopsRetryingWhenContextEnds(t *testing.T) {
 		fixture.processor.Process(ctx, fixture.deliveryOfType(t, notification.TypePush))
 	}()
 	require.Eventually(t, func() bool { return fixture.sender.callCount() == 1 }, 2*time.Second, time.Millisecond)
-	cancel()
+	cancel(ErrSessionAborted)
 
 	select {
 	case <-done:
@@ -400,4 +405,31 @@ func TestProcessLogsCarryNotificationID(t *testing.T) {
 	for _, entry := range entries {
 		assert.Equal(t, testNotificationID, entry.ContextMap()["notification_id"], entry.Message)
 	}
+}
+
+func TestProcessFailsNotificationWhenPerJobTimeoutExpires(t *testing.T) {
+	fixture := newProcessorFixture(0)
+	fixture.sender.honourContext = true
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+
+	fixture.processor.Process(ctx, fixture.deliveryOfType(t, notification.TypePush))
+
+	assert.True(t, fixture.acknowledger.deadLettered())
+	assert.Equal(t, notification.StatusFailed, fixture.store.statusOf(testNotificationID))
+	assert.Equal(t, 1.0, fixture.sends(notification.TypePush, outcomeFailed))
+	assert.Equal(t, 1.0, testutil.ToFloat64(fixture.metrics.DeadLettered))
+}
+
+func TestProcessLeavesNotificationUnsettledWhenSessionAborts(t *testing.T) {
+	fixture := newProcessorFixture(0)
+	fixture.sender.honourContext = true
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(ErrSessionAborted)
+
+	fixture.processor.Process(ctx, fixture.deliveryOfType(t, notification.TypePush))
+
+	assert.False(t, fixture.acknowledger.settled())
+	assert.Empty(t, fixture.store.statusOf(testNotificationID))
 }

@@ -16,6 +16,8 @@ import (
 	"github.com/officiallysidsingh/go-notify/internal/service"
 )
 
+const statusUpdateTimeout = 5 * time.Second
+
 var errNoSenderForType = errors.New("no sender configured for notification type")
 
 const (
@@ -106,8 +108,10 @@ func (p *Processor) deliver(ctx context.Context, logger *zap.Logger, delivery am
 		p.recordStatus(ctx, logger, message.NotificationID, notification.StatusSent)
 		p.metrics.Sends.WithLabelValues(message.Type, outcomeSent).Inc()
 		p.acknowledge(logger, delivery)
-	case ctx.Err() != nil:
-		// Shutting down: leave the delivery unsettled so the broker redelivers it.
+	case errors.Is(context.Cause(ctx), ErrSessionAborted):
+		// The connection is gone: leave the delivery unsettled so the broker
+		// redelivers it. A per-job timeout is not this case; the channel is
+		// still open, so it fails and dead-letters below.
 		logger.Info("stopped before settling notification", zap.Error(err))
 	default:
 		p.fail(ctx, logger, delivery, message, err)
@@ -154,6 +158,9 @@ func (p *Processor) retryDelay(sendErr error) time.Duration {
 }
 
 func (p *Processor) recordStatus(ctx context.Context, logger *zap.Logger, notificationID int64, status string) {
+	// The job context may have just timed out; the status must still be written.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusUpdateTimeout)
+	defer cancel()
 	if err := p.store.UpdateNotificationStatus(ctx, notificationID, status); err != nil {
 		logger.Error("failed to record notification status", zap.String("status", status), zap.Error(err))
 	}
