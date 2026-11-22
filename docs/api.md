@@ -34,7 +34,8 @@ Response: `notification_id` (int64) is the ID to use with
 | `InvalidArgument` | validation failed | fix the request; do not retry |
 | `Unauthenticated` | missing or unknown key | fix credentials |
 | `ResourceExhausted` | rate limit hit | back off and retry later |
-| `Unavailable` | a dependency (Postgres, Redis, RabbitMQ) is down | retry with backoff |
+| `Unavailable` | a dependency is unreachable at request entry (rate limiter fails closed, broker publish fails, DB connection pool exhausted). Health flips `NOT_SERVING`, so the load balancer stops routing. | retry with backoff |
+| `Internal` | a storage call failed mid-request (DB error on insert/update/read). Driver text is logged, not returned. | retry; alert if rate exceeds baseline |
 | `Internal` | storage error | retry; report if persistent |
 
 ## GetNotificationStatus

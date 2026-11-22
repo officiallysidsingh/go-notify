@@ -73,7 +73,7 @@ mid-send. Unacked messages are redelivered by the broker.
 
 ## Server reflection and auth
 
-**Server reflection and auth.** `grpc.reflection` is off by default. Do not enable it in production: the API-key interceptor only covers unary RPCs, and the reflection service (`ServerReflectionInfo`) is streaming, so it bypasses auth. Clients that need method discovery must get it out-of-band (e.g. the committed proto file), or you must add a streaming auth interceptor before enabling reflection. The compose file sets `GRPC_REFLECTION=true` for local development only.
+`grpc.reflection` is off by default. Do not enable it in production: the API-key interceptor only covers unary RPCs, and the reflection service (`ServerReflectionInfo`) is streaming, so it bypasses auth. Clients that need method discovery must get it out-of-band (e.g. the committed proto file), or you must add a streaming auth interceptor before enabling reflection. The compose file sets `GRPC_REFLECTION=true` for local development only.
 
 ## Privacy caveat
 
