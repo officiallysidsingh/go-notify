@@ -205,3 +205,12 @@ func TestParseRetryAfterReturnsZeroForMalformed(t *testing.T) {
 		assert.Zero(t, parseRetryAfter(value, time.Now()), value)
 	}
 }
+
+func TestParseRetryAfterCapsOversizedIntegers(t *testing.T) {
+	// Large-but-in-range value: 3600s > 60s cap
+	assert.Equal(t, time.Minute, parseRetryAfter("3600", time.Now()))
+	// Overflow-prone value
+	assert.Equal(t, time.Minute, parseRetryAfter("10000000000", time.Now()))
+	// Out-of-range for int64 (strconv.ErrRange)
+	assert.Equal(t, time.Minute, parseRetryAfter("99999999999999999999999", time.Now()))
+}
