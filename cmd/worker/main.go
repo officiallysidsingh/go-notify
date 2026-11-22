@@ -2,64 +2,42 @@ package main
 
 import (
 	"context"
-	"log"
+	"io"
+	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/officiallysidsingh/go-notify/config"
-	"github.com/officiallysidsingh/go-notify/internal/consumer"
-	"github.com/officiallysidsingh/go-notify/internal/metrics"
-	"github.com/officiallysidsingh/go-notify/internal/notification"
-	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
-	"github.com/officiallysidsingh/go-notify/internal/repository"
-	"github.com/officiallysidsingh/go-notify/internal/service"
-)
-
-const (
-	workerCount    = 10
-	sendAttempts   = 3
-	sendRetryDelay = 2 * time.Second
-	reconnectDelay = 5 * time.Second
+	"github.com/officiallysidsingh/go-notify/internal/app"
+	"github.com/officiallysidsingh/go-notify/internal/logging"
 )
 
 func main() {
 	cfg, err := config.Load("./config")
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
+	exitOn(err)
+	exitOn(cfg.ValidateWorker())
+
+	logger, err := logging.New(cfg.Logging.Level)
+	exitOn(err)
+	defer func() { _ = logger.Sync() }()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	database, err := repository.NewDB(cfg.Postgres)
+	if err := app.RunWorker(ctx, cfg, logger); err != nil {
+		logger.Error("worker exited with error", zap.Error(err))
+		stop()
+		_ = logger.Sync()
+		os.Exit(1)
+	}
+}
+
+// exitOn reports a startup error on stderr (the logger is not up yet) and exits.
+func exitOn(err error) {
 	if err != nil {
-		log.Fatalf("Failed to initialize PostgresDB: %v", err)
+		_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
+		os.Exit(1)
 	}
-	defer func() {
-		if err := database.Close(); err != nil {
-			log.Printf("error closing database: %v", err)
-		}
-	}()
-
-	// Email and SMS have no sender yet; the processor fails and dead-letters
-	// those notifications instead of reporting them as sent.
-	senders := map[string]consumer.Sender{
-		notification.TypePush: service.NewNtfySender(cfg.Ntfy),
-	}
-	retry := consumer.RetryPolicy{MaxAttempts: sendAttempts, Delay: sendRetryDelay}
-	logger := zap.NewNop()
-	workerMetrics := metrics.NewWorker(prometheus.DefaultRegisterer)
-	processor := consumer.NewProcessor(database, senders, retry, workerMetrics, logger)
-
-	consumer.NewConsumer(consumer.Options{
-		URL:            cfg.RabbitMQ.URL,
-		Workers:        workerCount,
-		ReconnectDelay: reconnectDelay,
-		Dial:           rabbitmq.Dial,
-	}, processor, workerMetrics, logger).Run(ctx)
-	log.Println("Worker stopped")
 }
