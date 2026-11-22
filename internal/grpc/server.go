@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -32,17 +31,6 @@ type RateLimiter interface {
 }
 
 const statusUpdateTimeout = 5 * time.Second
-
-var notificationsReceived = prometheus.NewCounter(
-	prometheus.CounterOpts{
-		Name: "notifications_received_total",
-		Help: "Total number of notifications received via gRPC",
-	},
-)
-
-func init() {
-	prometheus.MustRegister(notificationsReceived)
-}
 
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
@@ -73,7 +61,6 @@ func (s *NotificationServer) SendNotification(
 	if err := s.checkRateLimit(ctx, req.UserId); err != nil {
 		return nil, err
 	}
-	notificationsReceived.Inc()
 
 	notificationID, err := s.store.InsertNotification(
 		ctx, notification.Message{
