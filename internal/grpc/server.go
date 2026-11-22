@@ -67,7 +67,7 @@ func (s *NotificationServer) SendNotification(
 	ctx context.Context,
 	req *pb.NotificationRequest,
 ) (*pb.NotificationResponse, error) {
-	if err := validate(req); err != nil {
+	if err := validateSend(req); err != nil {
 		return nil, err
 	}
 	if err := s.checkRateLimit(ctx, req.UserId); err != nil {
@@ -96,19 +96,6 @@ func (s *NotificationServer) SendNotification(
 	}
 
 	return &pb.NotificationResponse{Success: true, NotificationId: notificationID}, nil
-}
-
-func validate(req *pb.NotificationRequest) error {
-	if req.UserId == "" {
-		return status.Error(codes.InvalidArgument, "user_id is required")
-	}
-	if !notification.IsSupportedType(req.Type) {
-		return status.Errorf(
-			codes.InvalidArgument,
-			"unsupported notification type %q, expected one of %v", req.Type, notification.Types(),
-		)
-	}
-	return nil
 }
 
 func (s *NotificationServer) checkRateLimit(ctx context.Context, userID string) error {

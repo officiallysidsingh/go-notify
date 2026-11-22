@@ -197,3 +197,14 @@ func TestGetNotificationStatusReportsMissingNotificationAsNotFound(t *testing.T)
 
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
+
+func TestSendNotificationRejectsEmailBeforeStoring(t *testing.T) {
+	fixture := newServerFixture()
+	request := pushRequest()
+	request.Type = notification.TypeEmail
+
+	_, err := fixture.server.SendNotification(context.Background(), request)
+
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Zero(t, fixture.store.inserted)
+}
