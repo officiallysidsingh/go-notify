@@ -34,6 +34,8 @@ flowchart LR
      localhost:50051 notify.NotificationService/GetNotificationStatus
    ```
 
+   `GRPC_REFLECTION=true` is set in the compose file for the quickstart; for production, pass `-proto api/proto/notify.proto -import-path api/proto` to grpcurl instead.
+
 4. `make docker-down`.
 
 ## Docs
