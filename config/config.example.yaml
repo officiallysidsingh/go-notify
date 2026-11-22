@@ -8,9 +8,9 @@ postgres:
   DataSourceName: "postgres://notify:notify_pass@localhost:5432/go_notify?sslmode=disable" # PostgreSQL DataSourceName
   MaxOpenConns: 100 # PostgreSQL MaxOpenConns
   MaxIdleConns: 25 # PostgreSQL MaxIdleConns
-  ConnMaxLifetime: 20 * time.Minute # PostgreSQL ConnMaxLifetime
-  ConnMaxIdleTime: 5 * time.Minute # PostgreSQL ConnMaxIdleTime
-  ConnTimeout: 3 * time.Second # PostgreSQL ConnTimeout
+  ConnMaxLifetime: "20m" # PostgreSQL ConnMaxLifetime
+  ConnMaxIdleTime: "5m" # PostgreSQL ConnMaxIdleTime
+  ConnTimeout: "3s" # PostgreSQL ConnTimeout
 
 redis:
   addr: "redis_host:6379" # Redis address

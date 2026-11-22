@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/officiallysidsingh/go-notify/config"
@@ -81,6 +84,12 @@ func main() {
 		redisWindowDuration,
 	)
 
+	defer func() {
+		if err := limiter.Close(); err != nil {
+			log.Printf("error closing rate limiter: %v", err)
+		}
+	}()
+
 	// Start gRPC Server
 	listener, err := net.Listen("tcp", config.AppConfig.GRPC.Port)
 	if err != nil {
@@ -102,8 +111,17 @@ func main() {
 	// Register reflection service for debugging
 	reflection.Register(grpcServer)
 
+	// Finish in-flight requests on SIGINT/SIGTERM so the deferred cleanup runs
+	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-shutdown.Done()
+		sugar.Info("Shutting down gRPC server")
+		grpcServer.GracefulStop()
+	}()
+
 	sugar.Infof("gRPC server running on %s", config.AppConfig.GRPC.Port)
 	if err := grpcServer.Serve(listener); err != nil {
-		sugar.Fatalf("Failed to serve gRPC server: %v", err)
+		sugar.Errorf("Failed to serve gRPC server: %v", err)
 	}
 }

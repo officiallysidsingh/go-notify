@@ -54,51 +54,56 @@ type Config struct {
 	Ntfy     NtfyConfig
 }
 
+const defaultPostgresConnTimeout = 5 * time.Second
+
 // Global config instance
 var AppConfig *Config
 
 // Load config
 func LoadConfig(path string) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath(path)
+	// A fresh instance keeps repeated loads from seeing each other's search paths.
+	settings := viper.New()
+	settings.SetDefault("postgres.ConnTimeout", defaultPostgresConnTimeout)
+	settings.SetConfigName("config")
+	settings.SetConfigType("yaml")
+	settings.AddConfigPath(path)
 
 	// Allow overriding with env variables
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
+	settings.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	settings.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err != nil {
+	if err := settings.ReadInConfig(); err != nil {
 		log.Printf("No config file found: %v", err)
 	}
 
 	AppConfig = &Config{
 		GRPC: GRPCConfig{
-			Port: viper.GetString("grpc.port"),
+			Port: settings.GetString("grpc.port"),
 		},
 		RabbitMQ: RabbitMQConfig{
-			URL: viper.GetString("rabbitmq.url"),
+			URL: settings.GetString("rabbitmq.url"),
 		},
 		Postgres: PostgresConfig{
-			DataSourceName:  viper.GetString("postgres.DataSourceName"),
-			MaxOpenConns:    viper.GetInt("postgres.MaxOpenConns"),
-			MaxIdleConns:    viper.GetInt("postgres.MaxIdleConns"),
-			ConnMaxLifetime: viper.GetDuration("postgres.ConnMaxLifetime"),
-			ConnMaxIdleTime: viper.GetDuration("postgres.ConnMaxIdleTime"),
-			ConnTimeout:     viper.GetDuration("postgres.ConnTimeout"),
+			DataSourceName:  settings.GetString("postgres.DataSourceName"),
+			MaxOpenConns:    settings.GetInt("postgres.MaxOpenConns"),
+			MaxIdleConns:    settings.GetInt("postgres.MaxIdleConns"),
+			ConnMaxLifetime: settings.GetDuration("postgres.ConnMaxLifetime"),
+			ConnMaxIdleTime: settings.GetDuration("postgres.ConnMaxIdleTime"),
+			ConnTimeout:     settings.GetDuration("postgres.ConnTimeout"),
 		},
 		Redis: RedisConfig{
-			Addr:   viper.GetString("redis.addr"),
-			Limit:  viper.GetInt("redis.limit"),
-			Window: viper.GetString("redis.window"),
+			Addr:   settings.GetString("redis.addr"),
+			Limit:  settings.GetInt("redis.limit"),
+			Window: settings.GetString("redis.window"),
 		},
 		Metrics: MetricsConfig{
-			Port: viper.GetString("metrics.port"),
+			Port: settings.GetString("metrics.port"),
 		},
 		Logging: LoggingConfig{
-			Level: viper.GetString("logging.level"),
+			Level: settings.GetString("logging.level"),
 		},
 		Ntfy: NtfyConfig{
-			Topic: viper.GetString("ntfy.topic"),
+			Topic: settings.GetString("ntfy.topic"),
 		},
 	}
 }
