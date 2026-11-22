@@ -4,82 +4,115 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/streadway/amqp"
+	"go.uber.org/zap"
 
+	"github.com/officiallysidsingh/go-notify/internal/metrics"
 	"github.com/officiallysidsingh/go-notify/internal/notification"
 	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 )
 
 const (
-	reconnectDelay    = 5 * time.Second
-	processingTimeout = time.Minute
+	defaultReconnectDelay = 5 * time.Second
+	processingTimeout     = time.Minute
 )
 
-type deliveryHandler func(ctx context.Context, delivery amqp.Delivery)
-
-type job struct {
-	handle   deliveryHandler
-	delivery amqp.Delivery
+// Options configures a Consumer.
+type Options struct {
+	URL            string
+	Workers        int
+	ReconnectDelay time.Duration // defaults to 5s
+	Dial           rabbitmq.Dialer
 }
 
 // Consumer feeds deliveries from every notification queue to a shared worker
-// pool and reconnects whenever the broker connection is lost.
+// pool and reconnects whenever the broker connection is lost. The dead-letter
+// queue is deliberately not consumed: its messages are kept for inspection.
 type Consumer struct {
-	amqpURL   string
-	workers   int
+	opts      Options
 	processor *Processor
+	metrics   *metrics.Worker
+	logger    *zap.Logger
+	connected atomic.Bool
 }
 
-func NewConsumer(amqpURL string, workers int, processor *Processor) *Consumer {
-	return &Consumer{amqpURL: amqpURL, workers: workers, processor: processor}
+func NewConsumer(opts Options, processor *Processor, m *metrics.Worker, logger *zap.Logger) *Consumer {
+	if opts.ReconnectDelay <= 0 {
+		opts.ReconnectDelay = defaultReconnectDelay
+	}
+	if opts.Workers < 1 {
+		opts.Workers = 1
+	}
+	if opts.Dial == nil {
+		opts.Dial = rabbitmq.Dial
+	}
+	return &Consumer{opts: opts, processor: processor, metrics: m, logger: logger}
+}
+
+// Connected reports whether the consumer is subscribed on a live connection.
+func (c *Consumer) Connected() bool {
+	return c.connected.Load()
 }
 
 // Run consumes until ctx is cancelled, then returns once in-flight
 // notifications have been settled.
 func (c *Consumer) Run(ctx context.Context) {
 	for ctx.Err() == nil {
-		err := c.consumeUntilDisconnected(ctx)
+		if err := c.runSession(ctx); err != nil {
+			c.logger.Warn("consumer session failed", zap.Error(err), zap.Duration("retry_in", c.opts.ReconnectDelay))
+		}
 		if ctx.Err() != nil {
 			return
 		}
-		log.Printf("Lost RabbitMQ connection, reconnecting in %s: %v", reconnectDelay, err)
-		waitOrDone(ctx, reconnectDelay)
+		waitOrDone(ctx, c.opts.ReconnectDelay)
 	}
 }
 
-func (c *Consumer) consumeUntilDisconnected(ctx context.Context) error {
-	conn, err := amqp.Dial(c.amqpURL)
+// runSession consumes over one connection until ctx ends or the connection is lost.
+func (c *Consumer) runSession(ctx context.Context) error {
+	conn, err := c.opts.Dial(c.opts.URL)
 	if err != nil {
 		return fmt.Errorf("failed to dial: %w", err)
 	}
-	defer closeQuietly(conn)
+	defer c.closeConnection(conn)
+	connectionLost := conn.NotifyClose(make(chan *amqp.Error, 1))
 
-	channel, err := c.openChannel(conn)
+	subscription, err := c.subscribe(conn)
 	if err != nil {
 		return err
 	}
-	handlers := c.handlersByQueue()
-	jobs, err := subscribe(channel, handlers)
-	if err != nil {
-		return err
-	}
-	log.Println("Consumer is up and running, waiting for messages...")
+	workers := c.startWorkers(subscription.streams)
+	c.connected.Store(true)
+	c.logger.Info("consumer is up and running, waiting for messages")
 
-	workersDone := c.startWorkers(jobs)
 	select {
 	case <-ctx.Done():
-		unsubscribe(channel, handlers)
-	case err = <-conn.NotifyClose(make(chan *amqp.Error, 1)):
+		c.cancelSubscriptions(subscription)
+		c.connected.Store(false)
+		workers.shutdown(false)
+		return nil
+	case lost := <-connectionLost:
+		c.connected.Store(false)
+		c.metrics.Reconnects.Inc()
+		workers.shutdown(true)
+		return fmt.Errorf("lost broker connection: %v", lost)
 	}
-	<-workersDone
-	return err
 }
 
-func (c *Consumer) openChannel(conn *amqp.Connection) (*amqp.Channel, error) {
+type subscription struct {
+	channel rabbitmq.Channel
+	tags    []string
+	streams []<-chan amqp.Delivery
+}
+
+// subscribe opens a channel, declares the topology and consumes every
+// notification queue. Each queue is consumed under its own name as the
+// consumer tag, which is what cancelSubscriptions cancels.
+func (c *Consumer) subscribe(conn rabbitmq.Connection) (*subscription, error) {
 	channel, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open a channel: %w", err)
@@ -88,50 +121,24 @@ func (c *Consumer) openChannel(conn *amqp.Connection) (*amqp.Channel, error) {
 		return nil, err
 	}
 	const prefetchSize, global = 0, false
-	if err := channel.Qos(c.workers, prefetchSize, global); err != nil {
+	if err := channel.Qos(c.opts.Workers, prefetchSize, global); err != nil {
 		return nil, fmt.Errorf("failed to set prefetch: %w", err)
 	}
-	return channel, nil
-}
 
-// subscribe merges every queue into one job stream, which closes once all
-// queues stop delivering (unsubscribed or connection lost).
-func subscribe(channel *amqp.Channel, handlers map[string]deliveryHandler) (<-chan job, error) {
-	jobs := make(chan job)
-	var forwarders sync.WaitGroup
-
-	for queue, handle := range handlers {
+	sub := &subscription{channel: channel}
+	for _, notificationType := range notification.Types() {
+		queue := rabbitmq.QueueForType(notificationType)
 		deliveries, err := consume(channel, queue)
 		if err != nil {
 			return nil, err
 		}
-		forwarders.Add(1)
-		go func() {
-			defer forwarders.Done()
-			for delivery := range deliveries {
-				jobs <- job{handle: handle, delivery: delivery}
-			}
-		}()
+		sub.tags = append(sub.tags, queue)
+		sub.streams = append(sub.streams, deliveries)
 	}
-
-	go func() {
-		forwarders.Wait()
-		close(jobs)
-	}()
-	return jobs, nil
+	return sub, nil
 }
 
-func (c *Consumer) handlersByQueue() map[string]deliveryHandler {
-	handlers := map[string]deliveryHandler{rabbitmq.DeadLetterQueue: logDeadLetter}
-	for _, notificationType := range notification.Types() {
-		handlers[rabbitmq.QueueForType(notificationType)] = c.processor.Process
-	}
-	return handlers
-}
-
-// Each queue is consumed under its own name as the consumer tag, which is what
-// unsubscribe cancels.
-func consume(channel *amqp.Channel, queue string) (<-chan amqp.Delivery, error) {
+func consume(channel rabbitmq.Channel, queue string) (<-chan amqp.Delivery, error) {
 	const autoAck, exclusive, noLocal, noWait = false, false, false, false
 	deliveries, err := channel.Consume(queue, queue, autoAck, exclusive, noLocal, noWait, nil)
 	if err != nil {
@@ -140,52 +147,86 @@ func consume(channel *amqp.Channel, queue string) (<-chan amqp.Delivery, error) 
 	return deliveries, nil
 }
 
-// unsubscribe stops new deliveries while keeping the channel open, so
+// cancelSubscriptions stops new deliveries while keeping the channel open, so
 // in-flight notifications can still be acknowledged.
-func unsubscribe(channel *amqp.Channel, handlers map[string]deliveryHandler) {
+func (c *Consumer) cancelSubscriptions(sub *subscription) {
 	const noWait = false
-	for queue := range handlers {
-		if err := channel.Cancel(queue, noWait); err != nil {
-			log.Printf("error cancelling consumer for %s: %v", queue, err)
+	for _, tag := range sub.tags {
+		if err := sub.channel.Cancel(tag, noWait); err != nil {
+			c.logger.Warn("failed to cancel consumer", zap.String("queue", tag), zap.Error(err))
 		}
 	}
 }
 
-func (c *Consumer) startWorkers(jobs <-chan job) <-chan struct{} {
-	var workers sync.WaitGroup
-	for range c.workers {
-		workers.Add(1)
+func (c *Consumer) closeConnection(conn rabbitmq.Connection) {
+	if err := conn.Close(); err != nil && !errors.Is(err, amqp.ErrClosed) {
+		c.logger.Warn("failed to close consumer connection", zap.Error(err))
+	}
+}
+
+// workerPool merges the queue streams into one and runs workers over it.
+type workerPool struct {
+	merged     chan amqp.Delivery
+	stop       chan struct{}
+	forwarders sync.WaitGroup
+	workers    sync.WaitGroup
+	cancelWork context.CancelFunc
+}
+
+func (c *Consumer) startWorkers(streams []<-chan amqp.Delivery) *workerPool {
+	// In-flight work outlives shutdown on purpose: a notification is finished
+	// and settled rather than abandoned half-sent.
+	workCtx, cancel := context.WithTimeout(context.Background(), processingTimeout)
+	pool := &workerPool{
+		merged:     make(chan amqp.Delivery),
+		stop:       make(chan struct{}),
+		cancelWork: cancel,
+	}
+	for _, stream := range streams {
+		pool.forwarders.Add(1)
+		go pool.forward(stream)
+	}
+	for range c.opts.Workers {
+		pool.workers.Add(1)
 		go func() {
-			defer workers.Done()
-			for queued := range jobs {
-				runJob(queued)
+			defer pool.workers.Done()
+			for delivery := range pool.merged {
+				c.processor.Process(workCtx, delivery)
 			}
 		}()
 	}
-
-	done := make(chan struct{})
-	go func() {
-		workers.Wait()
-		close(done)
-	}()
-	return done
+	return pool
 }
 
-// A job outlives shutdown on purpose: an in-flight notification is finished
-// and settled rather than abandoned half-sent.
-func runJob(queued job) {
-	ctx, cancel := context.WithTimeout(context.Background(), processingTimeout)
-	defer cancel()
-	queued.handle(ctx, queued.delivery)
-}
-
-func logDeadLetter(_ context.Context, delivery amqp.Delivery) {
-	log.Printf("Received DLQ message: %s", delivery.Body)
-	acknowledge(delivery)
-}
-
-func closeQuietly(conn *amqp.Connection) {
-	if err := conn.Close(); err != nil && !errors.Is(err, amqp.ErrClosed) {
-		log.Printf("error closing consumer connection: %v", err)
+func (p *workerPool) forward(stream <-chan amqp.Delivery) {
+	defer p.forwarders.Done()
+	for {
+		select {
+		case <-p.stop:
+			return
+		case delivery, open := <-stream:
+			if !open {
+				return
+			}
+			select {
+			case p.merged <- delivery:
+			case <-p.stop:
+				return
+			}
+		}
 	}
+}
+
+// shutdown stops intake and waits for workers to finish what they hold. With
+// abort set, in-flight work is told to stop too (the connection is gone, so
+// it could not be settled anyway).
+func (p *workerPool) shutdown(abort bool) {
+	close(p.stop)
+	p.forwarders.Wait()
+	close(p.merged)
+	if abort {
+		p.cancelWork()
+	}
+	p.workers.Wait()
+	p.cancelWork()
 }

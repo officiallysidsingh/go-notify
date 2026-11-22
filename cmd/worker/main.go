@@ -7,9 +7,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
+
 	"github.com/officiallysidsingh/go-notify/config"
 	"github.com/officiallysidsingh/go-notify/internal/consumer"
+	"github.com/officiallysidsingh/go-notify/internal/metrics"
 	"github.com/officiallysidsingh/go-notify/internal/notification"
+	"github.com/officiallysidsingh/go-notify/internal/rabbitmq"
 	"github.com/officiallysidsingh/go-notify/internal/repository"
 	"github.com/officiallysidsingh/go-notify/internal/service"
 )
@@ -18,6 +23,7 @@ const (
 	workerCount    = 10
 	sendAttempts   = 3
 	sendRetryDelay = 2 * time.Second
+	reconnectDelay = 5 * time.Second
 )
 
 func main() {
@@ -45,8 +51,15 @@ func main() {
 		notification.TypePush: service.NewNtfySender(cfg.Ntfy),
 	}
 	retry := consumer.RetryPolicy{MaxAttempts: sendAttempts, Delay: sendRetryDelay}
-	processor := consumer.NewProcessor(database, senders, retry)
+	logger := zap.NewNop()
+	workerMetrics := metrics.NewWorker(prometheus.DefaultRegisterer)
+	processor := consumer.NewProcessor(database, senders, retry, workerMetrics, logger)
 
-	consumer.NewConsumer(cfg.RabbitMQ.URL, workerCount, processor).Run(ctx)
+	consumer.NewConsumer(consumer.Options{
+		URL:            cfg.RabbitMQ.URL,
+		Workers:        workerCount,
+		ReconnectDelay: reconnectDelay,
+		Dial:           rabbitmq.Dial,
+	}, processor, workerMetrics, logger).Run(ctx)
 	log.Println("Worker stopped")
 }
