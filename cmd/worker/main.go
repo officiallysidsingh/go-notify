@@ -15,10 +15,9 @@ import (
 )
 
 const (
-	workerCount     = 10
-	sendAttempts    = 3
-	sendRetryDelay  = 2 * time.Second
-	pushSendTimeout = 10 * time.Second
+	workerCount    = 10
+	sendAttempts   = 3
+	sendRetryDelay = 2 * time.Second
 )
 
 func main() {
@@ -43,9 +42,7 @@ func main() {
 	// Email and SMS have no sender yet; the processor fails and dead-letters
 	// those notifications instead of reporting them as sent.
 	senders := map[string]consumer.Sender{
-		notification.TypePush: service.NewNtfySender(
-			service.NtfyBaseURL, cfg.Ntfy.Topic, pushSendTimeout,
-		),
+		notification.TypePush: service.NewNtfySender(cfg.Ntfy),
 	}
 	retry := consumer.RetryPolicy{MaxAttempts: sendAttempts, Delay: sendRetryDelay}
 	processor := consumer.NewProcessor(database, senders, retry)
