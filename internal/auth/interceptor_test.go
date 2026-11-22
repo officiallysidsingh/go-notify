@@ -69,3 +69,22 @@ func TestAllowAllNamesCallerAnonymous(t *testing.T) {
 	assert.True(t, called)
 	assert.Equal(t, "anonymous", caller)
 }
+
+func TestCallerFlowsOutwardThroughInterceptorChain(t *testing.T) {
+	info := &grpc.UnaryServerInfo{FullMethod: "/svc/Method"}
+	inner := UnaryInterceptor(newRing(t))
+	var seenAfter string
+	outer := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		ctx = EnsureCallerContext(ctx)
+		resp, err := handler(ctx, req)
+		seenAfter = CallerFromContext(ctx)
+		return resp, err
+	}
+
+	_, err := outer(withKey("k2"), nil, info, func(ctx context.Context, req any) (any, error) {
+		return inner(ctx, req, info, func(context.Context, any) (any, error) { return "ok", nil })
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "orders", seenAfter)
+}
